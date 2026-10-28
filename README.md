@@ -22,7 +22,7 @@ make, run `./install.sh install` directly. `make uninstall` (or
 ## Layout
 
 - `extensions/` — pi extensions (TypeScript, loaded directly by pi).
-- `prompts/` — prompt templates.
+- `prompts/` — empty, kept for local prompt templates (contents not tracked).
 - `themes/` — custom themes.
 - `keybindings.json` — keybindings.
 - `settings.json` — pi settings.
