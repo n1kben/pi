@@ -3,9 +3,11 @@
  *
  * Pi draws one row per tool call, a block per thinking run, and a turn for every
  * assistant message that hands off to tools. Silent mode drops all three while
- * they render, so the transcript keeps the prompts and the answers. Pi's own
- * working indicator still carries progress, and the notices Pi writes into the
- * chat (errors, warnings, status lines) stay readable.
+ * they render, so the transcript keeps the prompts and the answers. Progress
+ * shows in the terminal instead (Ghostty's tab indicator, via Pi's
+ * terminal.showTerminalProgress), so Pi's own working indicator is hidden too;
+ * the notices Pi writes into the chat (errors, warnings, status lines) stay
+ * readable.
  *
  * Those components belong to Pi, not to this extension, so hiding them is a patch
  * on their `render` that installs once per process. The patch looks its behavior
@@ -176,6 +178,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		state().enabled = true;
 		if (ctx.mode !== "tui") return;
+		// The terminal reports activity on its own; a second indicator under the
+		// prompt would only repeat it. Independent of the toggle: toggling reveals
+		// rows, not a status line.
+		ctx.ui.setWorkingVisible(false);
 		// An invisible widget is the extension API's way to reach Pi's TUI, which is
 		// what repaints the rows already in the transcript when the mode changes.
 		ctx.ui.setWidget(WIDGET_KEY, (tui) => {
