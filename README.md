@@ -15,8 +15,9 @@ make install
 ```
 
 `make install` symlinks `extensions/`, `prompts/`, `themes/`,
-`keybindings.json`, and `settings.json` into `~/.pi/agent`. Run
-`make uninstall` to remove the links.
+`keybindings.json`, and `settings.json` into `~/.pi/agent`. On machines without
+make, run `./install.sh install` directly. `make uninstall` (or
+`./install.sh uninstall`) removes the links.
 
 ## Layout
 
