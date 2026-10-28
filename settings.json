@@ -1,0 +1,27 @@
+{
+  "lastChangelogVersion": "1.4.0",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 122000,
+    "keepRecentTokens": 20000
+  },
+  "defaultThinkingLevel": "medium",
+  "defaultProvider": "openrouter",
+  "defaultModel": "deepseek/deepseek-v4.1-flash-1017",
+  "theme": "custom-dark",
+  "packages": [],
+  "autocompleteMaxVisible": 10,
+  "terminal": {
+    "showTerminalProgress": true
+  },
+  "steeringMode": "one-at-a-time",
+  "hideThinkingBlock": false,
+  "collapseChangelog": true,
+  "quietStartup": true,
+  "doubleEscapeAction": "tree",
+  "treeFilterMode": "all",
+  "tuiMode": "fullscreen",
+  "defaultTools": [
+    "+codemode"
+  ]
+}
