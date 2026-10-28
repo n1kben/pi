@@ -5,7 +5,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${HOME}/.pi/agent"
-FILES=(extensions prompts themes keybindings.json settings.json)
+FILES=(extensions prompts themes keybindings.json settings.json models.json)
 
 link() {
 	local status=0

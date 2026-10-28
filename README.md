@@ -15,7 +15,7 @@ make install
 ```
 
 `make install` symlinks `extensions/`, `prompts/`, `themes/`,
-`keybindings.json`, and `settings.json` into `~/.pi/agent`. On machines without
+`keybindings.json`, `settings.json`, and `models.json` into `~/.pi/agent`. On machines without
 make, run `./install.sh install` directly. `make uninstall` (or
 `./install.sh uninstall`) removes the links.
 
@@ -26,6 +26,8 @@ make, run `./install.sh install` directly. `make uninstall` (or
 - `themes/` — custom themes.
 - `keybindings.json` — keybindings.
 - `settings.json` — pi settings.
+- `models.json` — provider/model overrides (currently OpenRouter provider
+  routing: prefer Nebius, then Crusoe, sorted by latency).
 
 ## Note on settings
 

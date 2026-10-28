@@ -1,0 +1,21 @@
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "openrouter": {
+      "compat": {
+        "openRouterRouting": {
+          "order": [
+            "nebius",
+            "crusoe"
+          ],
+          "allow_fallbacks": true,
+          "sort": "latency",
+          "quantizations": [
+            "fp8",
+            "bf16"
+          ]
+        }
+      }
+    }
+  }
+}
