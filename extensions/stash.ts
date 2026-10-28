@@ -246,7 +246,7 @@ export default function (pi: ExtensionAPI) {
           }
 
           handleInput(data: string): void {
-            if (data === "\x13") {
+            if (matchesKey(data, "ctrl+s")) {
               const text = this.getText();
               void (text.trim() ? stashText(ctx, text) : manageStash(ctx));
               return;
