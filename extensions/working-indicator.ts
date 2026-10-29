@@ -87,10 +87,34 @@ const presets: Record<string, Preset> = {
 			});
 		},
 	},
-	/** Three dots filling and emptying. */
+	/** One dot filling and emptying. */
 	dots: {
 		intervalMs: 110,
 		frames: (theme) => ["·", "•", "●", "•"].map((glyph) => theme.fg("accent", glyph)),
+	},
+	/** Three dots swelling in turn, the way a typing bubble does. */
+	typing: {
+		intervalMs: 100,
+		frames: (theme) => {
+			const dots = 3;
+			const steps = 12;
+			const sizes = ["·", "•", "●"];
+			const top = sizes.length - 1;
+			/** One dot swells at a time, and the swell walks left to right. */
+			const swell = (step: number, dot: number): number => {
+				// Each dot runs a window of one cycle divided by the dot count, a third of a
+				// cycle behind the one before it.
+				const phase = (((step + steps / 2 - (dot * steps) / dots) % steps) + steps) % steps;
+				const distance = Math.abs(phase / steps - 0.5);
+				return Math.max(0, 1 - distance * dots);
+			};
+			return Array.from({ length: steps }, (_, step) =>
+				Array.from({ length: dots }, (_, dot) => {
+					const amount = swell(step, dot);
+					return paint(theme, "dim", "accent", amount, sizes[Math.round(amount * top)]!);
+				}).join(" "),
+			);
+		},
 	},
 };
 
