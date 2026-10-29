@@ -16,7 +16,7 @@
 import { type ExtensionAPI, type ExtensionContext, type Theme, type ThemeColor } from "@mariozechner/pi-coding-agent";
 import { foregroundAnsi, mixColors } from "@mariozechner/pi-tui";
 
-const DEFAULT_PRESET = "glow";
+const DEFAULT_PRESET = "ellipsis";
 const PREVIEW_KEY = "working-preview";
 /** Long enough to judge the rhythm, short enough not to sit in the way. */
 const PREVIEW_MS = 3500;
@@ -26,6 +26,11 @@ const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 /** Frames of one preset, painted for the theme in use. */
 interface Preset {
 	intervalMs: number;
+	/**
+	 * Label the preset draws into its own frames. A preset that carries one leaves Pi's
+	 * message empty, because the indicator is always rendered before the message.
+	 */
+	message?: string;
 	frames(theme: Theme): string[];
 }
 
@@ -47,6 +52,12 @@ function triangle(step: number, steps: number): number {
 }
 
 const presets: Record<string, Preset> = {
+	/** Nothing but plain dots after the word: no glyph, no color, no motion but the count. */
+	ellipsis: {
+		intervalMs: 330,
+		message: "",
+		frames: (theme) => [".", "..", "..."].map((dots) => theme.fg("muted", `Working ${dots}`)),
+	},
 	/** Pi's spinner, one frame quicker. */
 	spin: {
 		intervalMs: 70,
@@ -162,10 +173,12 @@ function preview(preset: Preset, ctx: ExtensionContext): void {
 function apply(preset: string | undefined, ctx: ExtensionContext): boolean {
 	if (preset === undefined) {
 		ctx.ui.setWorkingIndicator();
+		ctx.ui.setWorkingMessage(undefined);
 		return true;
 	}
 	const chosen = presets[preset];
 	if (!chosen) return false;
+	ctx.ui.setWorkingMessage(chosen.message);
 	ctx.ui.setWorkingIndicator({ frames: chosen.frames(ctx.ui.theme), intervalMs: chosen.intervalMs });
 	return true;
 }
