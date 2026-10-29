@@ -1,21 +1,22 @@
 /**
- * Silent transcript: only your prompts and the answers.
+ * Two transcripts: clean by default, everything on ctrl+o.
  *
  * Pi draws one row per tool call, a block per thinking run, and a turn for every
- * assistant message that hands off to tools. Silent mode drops all three while
- * they render, so the transcript keeps the prompts and the answers. Progress
- * shows in the terminal instead (Ghostty's tab indicator, via Pi's
- * terminal.showTerminalProgress), so Pi's own working indicator is hidden too;
- * the notices Pi writes into the chat (errors, warnings, status lines) stay
- * readable.
+ * assistant message that hands off to tools. Clean keeps only the prompts and the
+ * answers: those rows are dropped while they render, and Pi's own working
+ * indicator is hidden too, because the terminal reports activity on its own
+ * (Ghostty's tab indicator, via Pi's terminal.showTerminalProgress). The notices
+ * Pi writes into the chat (errors, warnings, status lines) stay readable.
  *
- * Those components belong to Pi, not to this extension, so hiding them is a patch
- * on their `render` that installs once per process. The patch looks its behavior
- * and the on/off flag up through `globalThis`, because Pi's classes outlive a
- * `/reload` while this module does not: a wrapper closing over its own copy would
- * keep running the first version until Pi restarts.
+ * ctrl+o is Pi's expand-everything key, so the mode is read from that same
+ * expansion state instead of a state of its own: collapsed renders clean, expanded
+ * renders every row inline, expanded, and with its thinking showing.
  *
- * Toggle with ctrl+' or /silent [on|off]. Every session starts silent.
+ * Those components belong to Pi, not to this extension, so the clean rendering is
+ * a patch on their `render` that installs once per process. The patch looks its
+ * behavior and the expansion state up through `globalThis`, because Pi's classes
+ * outlive a `/reload` while this module does not: a wrapper closing over its own
+ * copy would keep running the first version until Pi restarts.
  */
 import {
 	AssistantMessageComponent,
@@ -24,8 +25,6 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { MouseRegion, Spacer } from "@mariozechner/pi-tui";
 
-const SHORTCUT = "ctrl+'";
-const WIDGET_KEY = "silent";
 const STATE_KEY = Symbol.for("pi.silent.state");
 const BEHAVIOR_KEY = Symbol.for("pi.silent.behavior");
 const PATCH_KEY = Symbol.for("pi.silent.patch");
@@ -33,16 +32,35 @@ const PATCH_KEY = Symbol.for("pi.silent.patch");
 type Render = (width: number) => string[];
 type Override = (component: any, width: number, render: Render) => string[];
 
+/** A turn's children as Pi builds them, plus the two members this file reads. */
+interface AssistantLike {
+	hasToolCalls?: unknown;
+	hideThinkingBlock?: unknown;
+	setHideThinkingBlock?(hide: boolean): void;
+	contentContainer?: { children?: unknown[] };
+}
+
 interface State {
-	enabled: boolean;
-	/** Pi's TUI, reached through the widget factory; repaints the transcript on a toggle. */
-	tui?: { requestRender(): void };
+	/** Pi's expansion state, read at render time; absent outside the TUI. */
+	expanded?: () => boolean;
 }
 
 function state(): State {
 	const holder = globalThis as typeof globalThis & { [STATE_KEY]?: State };
-	holder[STATE_KEY] ??= { enabled: true };
+	holder[STATE_KEY] ??= {};
 	return holder[STATE_KEY];
+}
+
+/**
+ * Clean unless the reader asked ctrl+o for everything. A context Pi has since
+ * replaced throws, and an unreadable mode must not swallow the transcript.
+ */
+function clean(): boolean {
+	try {
+		return state().expanded?.() !== true;
+	} catch {
+		return true;
+	}
 }
 
 /**
@@ -56,29 +74,17 @@ function isKind(child: unknown, kind: abstract new (...args: any[]) => unknown):
 }
 
 /**
- * A turn that hands off to tools is progress, not an answer, however it ended.
- * Pi sets this from the message's content, so it holds for stored turns too.
- */
-function isIntermediate(component: { hasToolCalls?: unknown }): boolean {
-	return component.hasToolCalls === true;
-}
-
-/**
  * An assistant turn is built from three kinds of children: each thinking run is a
  * MouseRegion (the block, or its "Thinking…" label) followed by a spacer, the
  * answer is Markdown, and an error, abort, or truncation notice is a spacer plus a
  * plain Text. Only the thinking is dropped, and only for this one render: the
  * children are restored in `finally`, so the component and its message stay
- * untouched and reappear in full once the mode is off.
+ * untouched and reappear in full once the mode is expanded.
  */
-function answerOnly(
-	component: { hasToolCalls?: unknown; contentContainer?: { children?: unknown[] } },
-	width: number,
-	render: Render,
-): string[] {
-	// A turn that hands off to tools is progress: the work itself stays hidden, so
-	// its narration would describe rows that are no longer there.
-	if (isIntermediate(component)) return [];
+function answerOnly(component: AssistantLike, width: number, render: Render): string[] {
+	// A turn that hands off to tools is progress: the work itself is hidden, so its
+	// narration would describe rows that are no longer there.
+	if (component.hasToolCalls === true) return [];
 
 	const container = component.contentContainer;
 	const children = container?.children;
@@ -111,13 +117,23 @@ function answerOnly(
 	}
 }
 
-function silent(): boolean {
-	return state().enabled;
+/**
+ * Expanded means everything, thinking included. Pi reads its visibility only while
+ * rebuilding a turn, so flip the flag and let the rebuild happen before the render
+ * that follows — the same call Pi makes when the setting changes.
+ */
+function revealThinking(component: AssistantLike): void {
+	if (component.hideThinkingBlock !== true) return;
+	component.setHideThinkingBlock?.(false);
 }
 
 const behavior: Record<"tools" | "assistant", Override> = {
-	tools: (_component, width, render) => (silent() ? [] : render(width)),
-	assistant: (component, width, render) => (silent() ? answerOnly(component, width, render) : render(width)),
+	tools: (_component, width, render) => (clean() ? [] : render(width)),
+	assistant: (component, width, render) => {
+		if (clean()) return answerOnly(component, width, render);
+		revealThinking(component);
+		return render(width);
+	},
 };
 
 /** Route every patched render through the copy of this module loaded most recently. */
@@ -139,54 +155,17 @@ function patch(prototype: object | undefined, key: keyof typeof behavior): boole
 	return true;
 }
 
-function parseArgument(args: string, current: boolean): boolean | undefined {
-	const argument = args.trim().toLowerCase();
-	if (argument === "") return !current;
-	if (argument === "on") return true;
-	if (argument === "off") return false;
-	return undefined;
-}
-
 export default function (pi: ExtensionAPI) {
 	publish();
 	patch(ToolExecutionComponent?.prototype, "tools");
 	patch(AssistantMessageComponent?.prototype, "assistant");
 
-	const apply = (enabled: boolean): void => {
-		state().enabled = enabled;
-		// Nothing in the chat indicates the mode: it shows its own absence.
-		state().tui?.requestRender();
-	};
-
-	pi.registerCommand("silent", {
-		description: `(${SHORTCUT}) Show only your prompts and the answers`,
-		handler: async (args, ctx) => {
-			const enabled = parseArgument(args, silent());
-			if (enabled === undefined) {
-				ctx.ui.notify("Usage: /silent [on|off]", "warning");
-				return;
-			}
-			apply(enabled);
-		},
-	});
-
-	pi.registerShortcut(SHORTCUT, {
-		description: "Toggle the silent transcript",
-		handler: () => apply(!silent()),
-	});
-
 	pi.on("session_start", (_event, ctx) => {
-		state().enabled = true;
 		if (ctx.mode !== "tui") return;
-		// The terminal reports activity on its own; a second indicator under the
-		// prompt would only repeat it. Independent of the toggle: toggling reveals
-		// rows, not a status line.
+		// ctrl+o already repaints the transcript, so reading its state needs no hook
+		// of its own. The terminal reports activity; a second indicator in the
+		// prompt would only repeat it.
+		state().expanded = () => ctx.ui.getToolsExpanded();
 		ctx.ui.setWorkingVisible(false);
-		// An invisible widget is the extension API's way to reach Pi's TUI, which is
-		// what repaints the rows already in the transcript when the mode changes.
-		ctx.ui.setWidget(WIDGET_KEY, (tui) => {
-			state().tui = tui;
-			return { render: () => [], invalidate() {} };
-		}, { placement: "belowEditor" });
 	});
 }
