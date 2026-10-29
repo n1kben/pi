@@ -189,9 +189,12 @@ function patch(target: object | undefined, key: keyof typeof behavior): boolean 
 	return true;
 }
 
-/** Pi mounts the transcript document first in both UI modes, and its chat is the document's last child. */
+/**
+ * Pi mounts the transcript document first in TUI mode, and its chat is the document's last child.
+ * Modes without a TUI (print, json) never build one, so there is no chat to find.
+ */
 function findChat(tui: unknown): object | undefined {
-	const documentChildren = (tui as { children?: Array<{ children?: unknown[] }> }).children?.[0]?.children;
+	const documentChildren = (tui as { children?: Array<{ children?: unknown[] }> } | undefined)?.children?.[0]?.children;
 	const chat = Array.isArray(documentChildren) ? documentChildren.at(-1) : undefined;
 	const children = (chat as { children?: unknown } | undefined)?.children;
 	return chat && Array.isArray(children) ? chat : undefined;
