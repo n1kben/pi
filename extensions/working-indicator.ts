@@ -17,6 +17,9 @@ import { type ExtensionAPI, type ExtensionContext, type Theme, type ThemeColor }
 import { foregroundAnsi, mixColors } from "@mariozechner/pi-tui";
 
 const DEFAULT_PRESET = "glow";
+const PREVIEW_KEY = "working-preview";
+/** Long enough to judge the rhythm, short enough not to sit in the way. */
+const PREVIEW_MS = 3500;
 const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
@@ -93,6 +96,45 @@ const presets: Record<string, Preset> = {
 
 const names = Object.keys(presets).join(", ");
 
+/**
+ * Run the frames once under the editor, so a preset can be looked at without
+ * waiting for a request. A widget is Pi's only place for moving content that is not
+ * the working indicator itself, which only exists while a turn runs.
+ */
+function preview(preset: Preset, ctx: ExtensionContext): void {
+	const frames = preset.frames(ctx.ui.theme);
+	const message = ctx.ui.theme.fg("muted", "Working");
+	const steps = Math.max(1, Math.round(PREVIEW_MS / preset.intervalMs));
+	let step = 0;
+	let timer: ReturnType<typeof setInterval> | undefined;
+
+	const stop = (): void => {
+		if (timer) clearInterval(timer);
+		timer = undefined;
+		try {
+			ctx.ui.setWidget(PREVIEW_KEY, undefined);
+		} catch {
+			// The session was replaced under the timer; nothing left to clear.
+		}
+	};
+
+	ctx.ui.setWidget(PREVIEW_KEY, (tui) => {
+		if (timer) clearInterval(timer);
+		timer = setInterval(() => {
+			step += 1;
+			if (step > steps) {
+				stop();
+				return;
+			}
+			tui.requestRender();
+		}, preset.intervalMs);
+		return {
+			render: () => [` ${frames[step % frames.length] ?? ""} ${message}`],
+			invalidate() {},
+		};
+	}, { placement: "aboveEditor" });
+}
+
 function apply(preset: string | undefined, ctx: ExtensionContext): boolean {
 	if (preset === undefined) {
 		ctx.ui.setWorkingIndicator();
@@ -108,19 +150,35 @@ export default function (pi: ExtensionAPI) {
 	let current = DEFAULT_PRESET;
 
 	pi.registerCommand("working", {
-		description: `Choose the working indicator (${names}, default)`,
+		description: `Choose the working indicator (${names}, default); "preview" plays one`,
 		handler: async (args, ctx) => {
-			const preset = args.trim().toLowerCase();
-			if (preset === "") {
-				ctx.ui.notify(`Working indicator: ${current}. Choose ${names}, or default.`, "info");
+			const [choice, preset] = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+			if (choice === "preview") {
+				const wanted = preset ?? (current === "default" ? DEFAULT_PRESET : current);
+				const shown = presets[wanted];
+				if (!shown) {
+					ctx.ui.notify(`Unknown indicator: ${wanted}. Choose ${names}.`, "warning");
+					return;
+				}
+				if (preset) {
+					apply(preset, ctx);
+					current = preset;
+				}
+				preview(shown, ctx);
 				return;
 			}
-			if (preset !== "default" && !apply(preset, ctx)) {
-				ctx.ui.notify(`Unknown indicator: ${preset}. Choose ${names}, or default.`, "warning");
+
+			if (choice === "") {
+				ctx.ui.notify(`Working indicator: ${current}. Choose ${names}, default, or preview.`, "info");
 				return;
 			}
-			if (preset === "default") apply(undefined, ctx);
-			current = preset;
+			if (choice !== "default" && !apply(choice, ctx)) {
+				ctx.ui.notify(`Unknown indicator: ${choice}. Choose ${names}, default, or preview.`, "warning");
+				return;
+			}
+			if (choice === "default") apply(undefined, ctx);
+			current = choice;
 			ctx.ui.notify(`Working indicator: ${current}`, "info");
 		},
 	});
