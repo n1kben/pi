@@ -25,6 +25,9 @@ machines without make, run `./install.sh install` directly. `make uninstall`
 - `extensions/` — pi extensions (TypeScript, loaded directly by pi).
   `extensions/subagent/` is a vendored copy of [badlogic/pi-subagent](https://github.com/badlogic/pi-subagent),
   including its `subagent` CLI and skill; see its README for local changes.
+  `extensions/voice/` is cloud speech-to-text (OpenRouter/OpenAI-compatible
+  transcription API, `Ctrl+Space` to dictate); it needs `npm install` once for the
+  native recorder — see its README.
 - `prompts/` — empty, kept for local prompt templates (contents not tracked).
 - `themes/` — custom themes.
 - `keybindings.json` — keybindings.

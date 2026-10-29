@@ -1,0 +1,18 @@
+{
+  "name": "pi-voice-cloud",
+  "private": true,
+  "type": "module",
+  "description": "Cloud speech-to-text for pi: record, transcribe through an OpenAI-compatible API, paste into the editor",
+  "scripts": {
+    "check": "tsc -p .",
+    "install-deps": "npm install"
+  },
+  "dependencies": {
+    "@handy-computer/recorder": "0.2.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/node": "22.20.1",
+    "typescript": "5.9.3"
+  }
+}
