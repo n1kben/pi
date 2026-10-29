@@ -54,7 +54,7 @@ function triangle(step: number, steps: number): number {
 const presets: Record<string, Preset> = {
 	/** Nothing but plain dots after the word: no glyph, no color, no motion but the count. */
 	ellipsis: {
-		intervalMs: 330,
+		intervalMs: 200,
 		message: "",
 		frames: (theme) => [".", "..", "..."].map((dots) => theme.fg("muted", `Working ${dots}`)),
 	},
