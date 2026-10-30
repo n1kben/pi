@@ -19,14 +19,21 @@ Requires `tmux` and Node.js 22.19 or newer.
 
 ## Local changes from upstream
 
-- 2-space indentation to match this repo; no behavior changes.
+- 2-space indentation to match this repo.
+- Closing or replacing the parent session stops its subagents and deletes their
+  runs instead of suspending them for a later resume, so nothing is left running
+  or lying around after a session ends. A fresh pi process also sweeps runs its
+  session left behind (a `/reload` keeps the live children). To restore the
+  upstream suspend/relaunch behavior, revert `stopRuns` usage in `index.ts` and
+  the `suspended` metadata field.
 - Dropped the upstream `package.json` (pi discovers `extensions/subagent/index.ts`
   directly; the CLI symlink is handled by `install.sh` instead of a package
   `bin` entry).
 - This README replaces the upstream one.
-- `shared.ts` uses pi's `getAgentDir()` instead of a local copy of the agent-dir
-  resolution.
 - `index.ts` folds the duplicated tmux spawn promises into `runTmux()`.
+- `shared.ts` keeps a local `getAgentDir()` (upstream's) instead of importing
+  pi's: the `subagent` CLI runs outside pi, where `@mariozechner/pi-coding-agent`
+  does not resolve.
 
 Keep diffs against upstream small so updates stay easy: pull upstream into a
 checkout, copy the four files, and re-run the indentation step.

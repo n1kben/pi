@@ -1,13 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DynamicBorder, type ExtensionAPI, type ExtensionContext, keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text, type TUI } from "@earendil-works/pi-tui";
 import {
   effectiveRunState,
+  getRunsDir,
   inboxDir,
-  launchRun,
   listRuns,
   readMetadata,
   removeRunDir,
@@ -20,6 +20,42 @@ import {
 } from "./shared.ts";
 
 const packageDir = dirname(fileURLToPath(import.meta.url));
+
+/** Marks the pi process that owns a session's runs, so a reload does not look like a restart. */
+function sessionMarkerPath(sessionId: string): string {
+  return join(getRunsDir(), `.${sessionId}.pid`);
+}
+
+function markerOwnedByThisProcess(sessionId: string): boolean {
+  try {
+    return readFileSync(sessionMarkerPath(sessionId), "utf8").trim() === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+function writeSessionMarker(sessionId: string): void {
+  mkdirSync(getRunsDir(), { recursive: true, mode: 0o700 });
+  writeFileSync(sessionMarkerPath(sessionId), `${process.pid}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+function removeSessionMarker(sessionId: string): void {
+  try {
+    unlinkSync(sessionMarkerPath(sessionId));
+  } catch {
+    // Already gone.
+  }
+}
+
+async function stopRuns(runs: RunMetadata[]): Promise<void> {
+  for (const run of runs) {
+    if (tmuxSessionExists(run.tmuxSession)) {
+      spawnSync("tmux", ["kill-session", "-t", run.tmuxSession], { stdio: "ignore" });
+      await waitForRunShutdown(run.runDir);
+    }
+    removeRunDir(run.runDir);
+  }
+}
 
 function isInboxMessage(value: unknown): value is InboxMessage {
   if (typeof value !== "object" || value === null) return false;
@@ -147,23 +183,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
       );
     };
 
-    pi.on("session_start", (_event, ctx) => {
-      // Relaunch children that were suspended when this session was last quit or switched away from.
-      for (const run of listRuns(ctx.sessionManager.getSessionId())) {
-        if (!run.suspended || tmuxSessionExists(run.tmuxSession)) continue;
-        if (!existsSync(run.sessionFile)) {
-          removeRunDir(run.runDir);
-          continue;
-        }
-        const starting = updateMetadata(run.runDir, { state: "starting", error: undefined }) ?? run;
-        try {
-          launchRun(starting);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          updateMetadata(run.runDir, { state: "error", error: message });
-          if (ctx.hasUI) ctx.ui.notify(`Could not resume subagent ${runDisplayName(run)}: ${message}`, "error");
-        }
-      }
+    pi.on("session_start", async (_event, ctx) => {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const processAlreadyRunning = markerOwnedByThisProcess(sessionId);
+      writeSessionMarker(sessionId);
+      // A fresh pi process never inherits children: whatever an earlier process left behind for this
+      // session (quit, crash, or a session switch) is stopped here instead of being relaunched. A
+      // reload runs in the same process, so its live children are kept.
+      if (!processAlreadyRunning) await stopRuns(listRuns(sessionId));
 
       if (!ctx.hasUI) return;
       widgetContext = ctx;
@@ -178,17 +205,11 @@ export default function subagentExtension(pi: ExtensionAPI) {
       widgetContext = undefined;
       ctx.ui.setWidget("subagents", undefined);
       if (event.reason === "reload") return;
-      // Suspend running children: stop the process but keep transcript and metadata so resuming this
-      // session relaunches them. Children that already exited on their own are discarded.
-      for (const run of listRuns(ctx.sessionManager.getSessionId())) {
-        if (!tmuxSessionExists(run.tmuxSession)) {
-          if (!run.suspended) removeRunDir(run.runDir);
-          continue;
-        }
-        updateMetadata(run.runDir, { suspended: true });
-        spawnSync("tmux", ["kill-session", "-t", run.tmuxSession], { stdio: "ignore" });
-        await waitForRunShutdown(run.runDir);
-      }
+      // Closing or replacing the session stops its children and deletes their runs, so nothing is
+      // left running or lying around afterwards.
+      const sessionId = ctx.sessionManager.getSessionId();
+      await stopRuns(listRuns(sessionId));
+      removeSessionMarker(sessionId);
     });
     return;
   }

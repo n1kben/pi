@@ -10,10 +10,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
-
-export { getAgentDir };
 
 export type RunState = "starting" | "busy" | "idle" | "exited" | "error";
 
@@ -31,10 +29,8 @@ export interface RunMetadata {
   provider: string;
   model: string;
   thinking: string;
-  /** Extra pi CLI flags (tools, isolation) reused when the run is relaunched. */
+  /** Extra pi CLI flags (tools, isolation) passed on every launch. */
   launchArgs?: string[];
-  /** Set by the parent when it stops the child on quit or session switch; the child is relaunched on resume. */
-  suspended?: boolean;
   state: RunState;
   hasStarted: boolean;
   createdAt: string;
@@ -64,6 +60,12 @@ interface AssistantMessage {
 interface AssistantEntry extends SessionEntry {
   type: "message";
   message: AssistantMessage;
+}
+
+// pi exports getAgentDir(), but the `subagent` CLI runs outside pi, where
+// @mariozechner/pi-coding-agent cannot be resolved. Keep this two-line fallback.
+export function getAgentDir(): string {
+  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 }
 
 export function getRunsDir(): string {
