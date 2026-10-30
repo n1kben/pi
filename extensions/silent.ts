@@ -2,15 +2,14 @@
  * Two transcripts: clean by default, everything on ctrl+o.
  *
  * Pi draws one row per tool call, a block per thinking run, and a turn for every
- * assistant message that hands off to tools. Clean keeps only the prompts and the
- * answers: those rows are dropped while they render. The notices Pi writes into
- * the chat (errors, warnings, status lines) stay readable.
+ * assistant message that hands off to tools. Clean keeps the prompts, the answers, and
+ * the calls that change files: an edit or a write keeps its row, because that is the
+ * part the reader has to check, and every other call is the work itself. The notices Pi
+ * writes into the chat (errors, warnings, status lines) stay readable.
  *
  * ctrl+o is Pi's expand-everything key, so the mode is read from that same
  * expansion state instead of a state of its own: collapsed renders clean, expanded
- * renders every row inline, expanded, and with its thinking showing. The status
- * line Pi prints to confirm that toggle is dropped, because the transcript it just
- * changed is the answer.
+ * renders every row inline, expanded, and with its thinking showing.
  *
  * Those components belong to Pi, not to this extension, so the clean rendering is
  * a patch on their `render` that installs once per process. The patch looks its
@@ -23,18 +22,16 @@ import {
 	ToolExecutionComponent,
 	type ExtensionAPI,
 } from "@mariozechner/pi-coding-agent";
-import { MouseRegion, Spacer, Text, stripTerminalSequences } from "@mariozechner/pi-tui";
+import { MouseRegion, Spacer } from "@mariozechner/pi-tui";
 
-const WIDGET_KEY = "silent";
 const STATE_KEY = Symbol.for("pi.silent.state");
 const BEHAVIOR_KEY = Symbol.for("pi.silent.behavior");
 const PATCH_KEY = Symbol.for("pi.silent.patch");
-/** Pi's own wording for the ctrl+o toggle, matched after styling is stripped. */
-const TOGGLE_STATUS = /^Tool output: (expanded|collapsed)$/;
+/** Calls whose rows clean mode keeps: they change files, so the reader checks them. */
+const WRITE_TOOLS = new Set(["write", "edit"]);
 
 type Render = (width: number) => string[];
 type Override = (component: any, width: number, render: Render) => string[];
-type Renderable = { render: Render; children?: unknown[] };
 
 /** A turn's children as Pi builds them, plus the two members this file reads. */
 interface AssistantLike {
@@ -45,8 +42,6 @@ interface AssistantLike {
 }
 
 interface State {
-	/** Pi's TUI, reached through the widget factory; the chat container lives in it. */
-	tui?: unknown;
 	/** Pi's expansion state, read at render time; absent outside the TUI. */
 	expanded?: () => boolean;
 }
@@ -133,40 +128,14 @@ function revealThinking(component: AssistantLike): void {
 	component.setHideThinkingBlock?.(false);
 }
 
-/** Pi reports a ctrl+o toggle as one styled line; ThemedText extends Text, so both match. */
-function isToggleStatus(child: unknown, width: number): boolean {
-	if (!isKind(child, Text)) return false;
-	const [line] = (child as Renderable).render(width);
-	return line !== undefined && TOGGLE_STATUS.test(stripTerminalSequences(line).trim());
-}
-
-/**
- * The chat is a plain container of message components and status rows, so dropping
- * a row for this render is enough: the child list is restored in `finally` and Pi
- * keeps its own bookkeeping intact.
- */
-function withoutToggleStatus(container: { children?: unknown[] }, width: number, render: Render): string[] {
-	const children = container.children;
-	if (!Array.isArray(children) || children.length === 0) return render(width);
-	const kept = children.filter((child) => !isToggleStatus(child, width));
-	if (kept.length === children.length) return render(width);
-
-	container.children = kept;
-	try {
-		return render(width);
-	} finally {
-		container.children = children;
-	}
-}
-
 const behavior = {
-	tools: (_component, width, render) => (clean() ? [] : render(width)),
+	// Clean hides every call but the ones that changed a file.
+	tools: (component, width, render) => (clean() && !WRITE_TOOLS.has(component?.toolName) ? [] : render(width)),
 	assistant: (component, width, render) => {
 		if (clean()) return answerOnly(component, width, render);
 		revealThinking(component);
 		return render(width);
 	},
-	chat: (container, width, render) => withoutToggleStatus(container, width, render),
 } satisfies Record<string, Override>;
 
 /** Route every patched render through the copy of this module loaded most recently. */
@@ -174,39 +143,18 @@ function publish(): void {
 	(globalThis as typeof globalThis & { [BEHAVIOR_KEY]?: typeof behavior })[BEHAVIOR_KEY] = behavior;
 }
 
-/** Wrap one `render`, once per process, whether it lives on a prototype or a single container. */
-function patch(target: object | undefined, key: keyof typeof behavior): boolean {
-	if (!target || typeof (target as { render?: unknown }).render !== "function") return false;
+/** Wrap one prototype's `render`, once per process. */
+function patch(target: object | undefined, key: keyof typeof behavior): void {
+	if (!target || typeof (target as { render?: unknown }).render !== "function") return;
 	// Checked as an own property: a component inheriting render() from a shared base
 	// still needs its own wrapper, and a re-evaluating /reload must not stack one.
-	if (Object.hasOwn(target, PATCH_KEY)) return true;
+	if (Object.hasOwn(target, PATCH_KEY)) return;
 	const original = (target as { render: Render }).render;
 	(target as { render: Render }).render = function (this: unknown, width: number): string[] {
 		const override = (globalThis as typeof globalThis & { [BEHAVIOR_KEY]?: typeof behavior })[BEHAVIOR_KEY]?.[key];
 		return override ? override(this, width, (next) => original.call(this, next)) : original.call(this, width);
 	};
 	Object.defineProperty(target, PATCH_KEY, { value: true });
-	return true;
-}
-
-/**
- * Pi mounts the transcript document first in TUI mode, and its chat is the document's last child.
- * Modes without a TUI (print, json) never build one, so there is no chat to find.
- */
-function findChat(tui: unknown): object | undefined {
-	const documentChildren = (tui as { children?: Array<{ children?: unknown[] }> } | undefined)?.children?.[0]?.children;
-	const chat = Array.isArray(documentChildren) ? documentChildren.at(-1) : undefined;
-	const children = (chat as { children?: unknown } | undefined)?.children;
-	return chat && Array.isArray(children) ? chat : undefined;
-}
-
-/**
- * Patched as soon as the chat is mounted. The first attempt runs when Pi builds the
- * widget, which can be before the document exists; the runs that follow retry.
- */
-function hookChat(): void {
-	const chat = findChat(state().tui);
-	if (chat) patch(chat, "chat");
 }
 
 export default function (pi: ExtensionAPI) {
@@ -217,14 +165,5 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		state().expanded = () => ctx.ui.getToolsExpanded();
-		// An invisible widget is the extension API's way to reach Pi's TUI, and with
-		// it the chat container the toggle's status line is written into.
-		ctx.ui.setWidget(WIDGET_KEY, (tui) => {
-			state().tui = tui;
-			hookChat();
-			return { render: () => [], invalidate() {} };
-		}, { placement: "belowEditor" });
 	});
-
-	pi.on("agent_start", () => hookChat());
 }
