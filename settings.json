@@ -6,8 +6,8 @@
     "keepRecentTokens": 20000
   },
   "defaultThinkingLevel": "medium",
-  "defaultProvider": "openrouter",
-  "defaultModel": "deepseek/deepseek-v4.1-flash-1017",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6.1-sol",
   "theme": "custom-dark",
   "packages": [],
   "autocompleteMaxVisible": 10,
