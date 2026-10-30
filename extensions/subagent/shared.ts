@@ -10,8 +10,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
+
+export { getAgentDir };
 
 export type RunState = "starting" | "busy" | "idle" | "exited" | "error";
 
@@ -62,10 +64,6 @@ interface AssistantMessage {
 interface AssistantEntry extends SessionEntry {
   type: "message";
   message: AssistantMessage;
-}
-
-export function getAgentDir(): string {
-  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 }
 
 export function getRunsDir(): string {

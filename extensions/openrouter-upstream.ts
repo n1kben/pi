@@ -13,12 +13,11 @@
  * session entry, so /reload restores this conversation's provider instead of
  * whatever happened to be last in the (shared) log.
  */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { appendFileSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
-const LOG = join(homedir(), ".pi", "agent", "openrouter-upstream.log");
+const LOG = join(getAgentDir(), "openrouter-upstream.log");
 const STATUS_KEY = "openrouter-upstream";
 const STATE_TYPE = "openrouter-upstream";
 const HISTORY = 10;

@@ -31,6 +31,15 @@ function displayState(metadata: RunMetadata): string {
   return effectiveRunState(metadata).padEnd(8);
 }
 
+/** Attach to a tmux session, keeping this terminal's stdio. */
+function runTmux(args: string[]): Promise<number | null> {
+  return new Promise((resolveExit) => {
+    const child = spawn("tmux", args, { stdio: "inherit" });
+    child.on("error", () => resolveExit(null));
+    child.on("close", resolveExit);
+  });
+}
+
 export default function subagentExtension(pi: ExtensionAPI) {
   const runDir = process.env.PI_SUBAGENT_RUN_DIR;
   if (!runDir) {
@@ -93,22 +102,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
       if (!run) return;
 
       if (process.env.TMUX) {
-        const exitCode = await new Promise<number | null>((resolveExit) => {
-          const child = spawn("tmux", ["switch-client", "-t", run.tmuxSession], { stdio: "inherit" });
-          child.on("error", () => resolveExit(null));
-          child.on("close", resolveExit);
-        });
+        const exitCode = await runTmux(["switch-client", "-t", run.tmuxSession]);
         if (exitCode !== 0) ctx.ui.notify(`Could not switch to ${run.handle}`, "error");
         return;
       }
 
       tui.stop();
       try {
-        const exitCode = await new Promise<number | null>((resolveExit) => {
-          const child = spawn("tmux", ["attach-session", "-t", run.tmuxSession], { stdio: "inherit" });
-          child.on("error", () => resolveExit(null));
-          child.on("close", resolveExit);
-        });
+        const exitCode = await runTmux(["attach-session", "-t", run.tmuxSession]);
         if (exitCode !== 0) process.stderr.write(`Could not attach to ${run.handle}\n`);
       } finally {
         tui.start();

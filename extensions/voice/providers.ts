@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+export const AGENT_DIR = getAgentDir();
 
 /** One speech-to-text backend. Adding a provider means adding a preset. */
 export type ProviderPreset = {

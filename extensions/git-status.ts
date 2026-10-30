@@ -1,13 +1,11 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { execFile } from "node:child_process";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
-const MAX_UNTRACKED_FILE_BYTES = 1024 * 1024;
 
 type GitStats = { additions: number; deletions: number } | null;
+type Exec = ExtensionAPI["exec"];
+
+const MAX_UNTRACKED_FILE_BYTES = 1024 * 1024;
 
 function shellGreen(text: string): string {
 	return `\x1b[32m${text}\x1b[39m`;
@@ -15,6 +13,12 @@ function shellGreen(text: string): string {
 
 function shellRed(text: string): string {
 	return `\x1b[31m${text}\x1b[39m`;
+}
+
+/** Trimmed stdout of a git command, or undefined when it fails (e.g. not a repo). */
+async function git(exec: Exec, cwd: string, args: string[]): Promise<string | undefined> {
+	const { stdout, code } = await exec("git", args, { cwd, timeout: 5000 });
+	return code === 0 ? stdout : undefined;
 }
 
 function countTextLines(buffer: Buffer): number {
@@ -27,15 +31,12 @@ function countTextLines(buffer: Buffer): number {
 	return buffer.at(-1) === 10 ? lines : lines + 1;
 }
 
-async function countUntrackedAdditions(cwd: string): Promise<number> {
-	const { stdout } = await execFileAsync("git", ["-C", cwd, "ls-files", "--others", "--exclude-standard", "-z"], {
-		timeout: 5000,
-		maxBuffer: 1024 * 1024,
-		encoding: "buffer",
-	});
+async function countUntrackedAdditions(exec: Exec, cwd: string): Promise<number> {
+	const listed = await git(exec, cwd, ["ls-files", "--others", "--exclude-standard", "-z"]);
+	if (listed === undefined) return 0;
 
 	let additions = 0;
-	for (const file of stdout.toString("utf8").split("\0")) {
+	for (const file of listed.split("\0")) {
 		if (!file) continue;
 
 		try {
@@ -51,47 +52,31 @@ async function countUntrackedAdditions(cwd: string): Promise<number> {
 	return additions;
 }
 
-async function getGitBranch(cwd: string): Promise<string | null> {
-	try {
-		const { stdout } = await execFileAsync("git", ["-C", cwd, "branch", "--show-current"], {
-			timeout: 5000,
-			maxBuffer: 64 * 1024,
-		});
-		const branch = stdout.trim();
-		if (branch) return branch;
+async function getGitBranch(exec: Exec, cwd: string): Promise<string | null> {
+	const branch = (await git(exec, cwd, ["branch", "--show-current"]))?.trim();
+	if (branch) return branch;
 
-		const detached = await execFileAsync("git", ["-C", cwd, "rev-parse", "--short", "HEAD"], {
-			timeout: 5000,
-			maxBuffer: 64 * 1024,
-		});
-		return detached.stdout.trim() || null;
-	} catch {
-		return null;
-	}
+	const detached = (await git(exec, cwd, ["rev-parse", "--short", "HEAD"]))?.trim();
+	return detached || null;
 }
 
-async function getGitStats(cwd: string): Promise<GitStats> {
-	try {
-		const { stdout } = await execFileAsync("git", ["-C", cwd, "diff", "--numstat", "HEAD", "--"], {
-			timeout: 5000,
-			maxBuffer: 1024 * 1024,
-		});
-		let additions = 0;
-		let deletions = 0;
+async function getGitStats(exec: Exec, cwd: string): Promise<GitStats> {
+	const numstat = await git(exec, cwd, ["diff", "--numstat", "HEAD", "--"]);
+	if (numstat === undefined) return null;
 
-		for (const line of stdout.trim().split("\n")) {
-			if (!line) continue;
-			const [added, deleted] = line.split("\t");
-			if (added !== "-") additions += Number(added) || 0;
-			if (deleted !== "-") deletions += Number(deleted) || 0;
-		}
+	let additions = 0;
+	let deletions = 0;
 
-		additions += await countUntrackedAdditions(cwd);
-
-		return { additions, deletions };
-	} catch {
-		return null;
+	for (const line of numstat.trim().split("\n")) {
+		if (!line) continue;
+		const [added, deleted] = line.split("\t");
+		if (added !== "-") additions += Number(added) || 0;
+		if (deleted !== "-") deletions += Number(deleted) || 0;
 	}
+
+	additions += await countUntrackedAdditions(exec, cwd);
+
+	return { additions, deletions };
 }
 
 function gitStatsText(stats: GitStats): string {
@@ -99,19 +84,20 @@ function gitStatsText(stats: GitStats): string {
 	return ` ${shellGreen(`+${stats.additions}`)} ${shellRed(`-${stats.deletions}`)}`;
 }
 
-async function gitStatusText(cwd: string): Promise<string | undefined> {
-	const branch = await getGitBranch(cwd);
+async function gitStatusText(exec: Exec, cwd: string): Promise<string | undefined> {
+	const branch = await getGitBranch(exec, cwd);
 	if (!branch) return undefined;
-	return `${shellGreen(`(${branch})`)}${gitStatsText(await getGitStats(cwd))}`;
+	return `${shellGreen(`(${branch})`)}${gitStatsText(await getGitStats(exec, cwd))}`;
 }
 
 export default function (pi: ExtensionAPI) {
+	const exec: Exec = (command, args, options) => pi.exec(command, args, options);
 	let refresh: (() => void) | undefined;
 	let lastStatus: string | undefined;
 
 	pi.on("session_start", async (_event, ctx) => {
 		const update = async () => {
-			const status = await gitStatusText(ctx.cwd);
+			const status = await gitStatusText(exec, ctx.cwd);
 			if (status === lastStatus) return;
 			lastStatus = status;
 			ctx.ui.setStatus("git", status);

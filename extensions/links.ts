@@ -34,15 +34,39 @@ function shouldScanMessage(message: Record<string, unknown>): boolean {
   return message.role === "user" || message.role === "assistant";
 }
 
-function branchText(ctx: ExtensionContext): string {
-  return ctx.sessionManager.getBranch().map((entry: unknown) => {
-    if (!entry || typeof entry !== "object") return "";
-    const record = entry as Record<string, unknown>;
-    if (record.type !== "message" || !record.message || typeof record.message !== "object") return "";
+function linkableEntryText(entry: unknown): string {
+  if (!entry || typeof entry !== "object") return "";
+  const record = entry as Record<string, unknown>;
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") return "";
 
-    const message = record.message as Record<string, unknown>;
-    return shouldScanMessage(message) ? textContent(message.content) : "";
-  }).filter(Boolean).join("\n");
+  const message = record.message as Record<string, unknown>;
+  return shouldScanMessage(message) ? textContent(message.content) : "";
+}
+
+/**
+ * Branch text cached across the streaming updates that drive the widget.
+ * Entries are append-only within a branch, so only new entries are scanned;
+ * a different leaf (tree navigation, fork) rebuilds from scratch.
+ */
+let branchCache: { leafId: string | null; count: number; text: string } | undefined;
+
+function branchText(ctx: ExtensionContext): string {
+  const leafId = ctx.sessionManager.getLeafId();
+  const entries = ctx.sessionManager.getBranch();
+
+  if (!branchCache || branchCache.leafId !== leafId || entries.length < branchCache.count) {
+    const text = entries.map(linkableEntryText).filter(Boolean).join("\n");
+    branchCache = { leafId, count: entries.length, text };
+    return text;
+  }
+
+  if (entries.length > branchCache.count) {
+    const fresh = entries.slice(branchCache.count).map(linkableEntryText).filter(Boolean).join("\n");
+    if (fresh) branchCache.text = branchCache.text ? `${branchCache.text}\n${fresh}` : fresh;
+    branchCache.count = entries.length;
+  }
+
+  return branchCache.text;
 }
 
 function normalizeRepo(owner: string, repo: string): string {

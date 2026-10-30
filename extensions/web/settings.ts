@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { defaults } from "./config.ts";
 
 export type RenderMode = "auto" | "http" | "browser";
@@ -41,7 +41,7 @@ export interface SettingsResult {
 const base: WebSettings = {
   count: 5,
   country: "US",
-  cacheDir: join(homedir(), ".pi", "agent", "web-cache"),
+  cacheDir: join(getAgentDir(), "web-cache"),
   cacheTtlMs: 24 * 60 * 60 * 1000,
   maxChars: 40000,
   pageChars: 6000,
@@ -56,7 +56,7 @@ const base: WebSettings = {
 };
 
 export function configPath(): string {
-  return process.env.PI_WEB_CONFIG ?? join(homedir(), ".pi", "agent", "web.json");
+  return process.env.PI_WEB_CONFIG ?? join(getAgentDir(), "web.json");
 }
 
 type ConfigFile = Partial<Omit<WebSettings, "cacheDir" | "cacheTtlMs">> & {

@@ -24,6 +24,9 @@ Requires `tmux` and Node.js 22.19 or newer.
   directly; the CLI symlink is handled by `install.sh` instead of a package
   `bin` entry).
 - This README replaces the upstream one.
+- `shared.ts` uses pi's `getAgentDir()` instead of a local copy of the agent-dir
+  resolution.
+- `index.ts` folds the duplicated tmux spawn promises into `runTmux()`.
 
 Keep diffs against upstream small so updates stay easy: pull upstream into a
 checkout, copy the four files, and re-run the indentation step.

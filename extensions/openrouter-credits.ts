@@ -15,12 +15,11 @@
  *   PI_OPENROUTER_CREDITS_POLL_MS refresh interval      (default: 120000)
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "openrouter-credits";
-const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+const AGENT_DIR = getAgentDir();
 const CACHE_FILE = join(AGENT_DIR, "openrouter-credits.json");
 const CREDITS_URL = "https://openrouter.ai/api/v1/credits";
 const KEY_URL = "https://openrouter.ai/api/v1/key";
