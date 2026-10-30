@@ -17,8 +17,13 @@ function shellRed(text: string): string {
 
 /** Trimmed stdout of a git command, or undefined when it fails (e.g. not a repo). */
 async function git(exec: Exec, cwd: string, args: string[]): Promise<string | undefined> {
-	const { stdout, code } = await exec("git", args, { cwd, timeout: 5000 });
-	return code === 0 ? stdout : undefined;
+	try {
+		const { stdout, code } = await exec("git", args, { cwd, timeout: 5000 });
+		return code === 0 ? stdout : undefined;
+	} catch {
+		// Session ended mid-refresh (exec rejects once its ctx is stale) or git is unavailable.
+		return undefined;
+	}
 }
 
 function countTextLines(buffer: Buffer): number {
@@ -89,15 +94,17 @@ export default function (pi: ExtensionAPI) {
 	const exec: Exec = (command, args, options) => pi.exec(command, args, options);
 	let refresh: (() => void) | undefined;
 	let lastStatus: string | undefined;
+	let closed = true;
 
 	pi.on("session_start", async (_event, ctx) => {
+		closed = false;
 		const update = async () => {
 			const status = await gitStatusText(exec, ctx.cwd);
-			if (status === lastStatus) return;
+			if (closed || status === lastStatus) return;
 			lastStatus = status;
 			ctx.ui.setStatus("git", status);
 		};
-		refresh = () => void update();
+		refresh = () => void update().catch(() => {});
 		refresh();
 	});
 
@@ -105,6 +112,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_end", async () => refresh?.());
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		closed = true;
 		if (ctx.hasUI) ctx.ui.setStatus("git", undefined);
 		refresh = undefined;
 		lastStatus = undefined;
