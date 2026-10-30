@@ -14,6 +14,10 @@ import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Short values are redacted everywhere, so they corrupt unrelated output. */
+const MIN_LENGTH = 8;
+/** Vars that break Pi or the agent's shell if a secret overwrites them. */
+const RESERVED = /^(PATH|HOME|SHELL|USER|LOGNAME|TMPDIR|TERM|LANG|PWD|OLDPWD|EDITOR|VISUAL|IFS|LD_PRELOAD|DYLD_INSERT_LIBRARIES|NODE_OPTIONS)$/;
 
 /** name → value, for redaction. The value also lives in process.env. */
 const secrets = new Map<string, string>();
@@ -22,6 +26,9 @@ function normalizeName(raw: string): string {
 	const name = raw.trim().toUpperCase();
 	if (!NAME_PATTERN.test(name)) {
 		throw new Error(`Invalid secret name "${raw}": use letters, digits and underscores, starting with a letter or underscore`);
+	}
+	if (RESERVED.test(name) || name.startsWith("PI_")) {
+		throw new Error(`"${name}" is reserved: storing it would overwrite the shell or Pi's own environment`);
 	}
 	return name;
 }
@@ -64,7 +71,7 @@ export default function (pi: ExtensionAPI) {
 			"Values are redacted from tool output, so do not print a secret to confirm it; check its length or a hash instead.",
 		],
 		parameters: Type.Object({
-			name: Type.String({ description: "Identifier for the secret, e.g. STRIPE_API_KEY" }),
+			name: Type.String({ description: "Identifier for the secret: upper snake case, e.g. STRIPE_API_KEY. Cannot be a shell variable such as PATH, or PI_*" }),
 			reason: Type.Optional(Type.String({ description: "One line shown to the user: what the secret is used for" })),
 		}),
 		executionMode: "sequential",
@@ -79,6 +86,14 @@ export default function (pi: ExtensionAPI) {
 			if (!value) {
 				return {
 					content: [{ type: "text", text: "The user cancelled the prompt, so the secret is not available. Do not guess it; ask what you need it for or continue without it." }],
+					details: { name },
+					isError: true,
+				};
+			}
+
+			if (value.length < MIN_LENGTH) {
+				return {
+					content: [{ type: "text", text: `"${name}" was ${value.length} characters, below the ${MIN_LENGTH}-character minimum. Such a short value would be redacted from unrelated output, so it is not stored. Ask the user for the real value, or have them paste it somewhere you can read.` }],
 					details: { name },
 					isError: true,
 				};
