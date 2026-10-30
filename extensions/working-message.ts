@@ -23,44 +23,68 @@ const DWELL_MS = 2000;
 const COALESCE_MS = 400;
 const THINKING = "Thinking";
 
-/** Programs whose job reads better than their name. */
-const PROGRAMS: Record<string, string> = {
-	bun: "Running a script",
-	cargo: "Building",
-	cat: "Reading",
-	clang: "Compiling",
-	cp: "Copying files",
-	curl: "Fetching",
-	deno: "Running a script",
-	docker: "Running docker",
-	gcc: "Compiling",
-	gh: "Talking to GitHub",
-	git: "Running git",
-	go: "Building",
-	grep: "Searching",
-	head: "Reading",
-	jest: "Running tests",
-	jq: "Reshaping json",
-	ls: "Listing",
-	make: "Building",
-	mkdir: "Creating a directory",
-	mv: "Moving files",
-	node: "Running a script",
-	npm: "Running npm",
-	python: "Running a script",
-	python3: "Running a script",
-	pytest: "Running tests",
-	rg: "Searching",
-	rm: "Removing files",
-	rustc: "Compiling",
-	scp: "Copying files",
-	sed: "Editing text",
-	ssh: "Connecting",
-	tail: "Reading",
-	tree: "Listing",
-	tsc: "Typechecking",
-	vitest: "Running tests",
-	wget: "Fetching",
+/** Programs whose job reads better than their name; `arg` says what to name after it. */
+const PROGRAMS: Record<string, { verb: string; arg?: "file" | "raw" | "host" | "script" }> = {
+	awk: { verb: "Milling text" },
+	brew: { verb: "Installing" },
+	bun: { verb: "Running", arg: "script" },
+	cargo: { verb: "Building" },
+	cat: { verb: "Reading", arg: "file" },
+	cd: { verb: "Changing directory" },
+	clang: { verb: "Compiling" },
+	cp: { verb: "Copying files" },
+	curl: { verb: "Fetching", arg: "host" },
+	deno: { verb: "Running", arg: "script" },
+	docker: { verb: "Running docker" },
+	echo: { verb: "Printing" },
+	export: { verb: "Setting up" },
+	find: { verb: "Finding" },
+	for: { verb: "Looping" },
+	gcc: { verb: "Compiling" },
+	gh: { verb: "Talking to GitHub" },
+	git: { verb: "Running git" },
+	go: { verb: "Building" },
+	grep: { verb: "Searching for", arg: "raw" },
+	head: { verb: "Reading", arg: "file" },
+	jest: { verb: "Running tests" },
+	jq: { verb: "Reshaping json" },
+	linear: { verb: "Talking to Linear" },
+	ln: { verb: "Linking files" },
+	ls: { verb: "Listing", arg: "file" },
+	make: { verb: "Building" },
+	"mcp-cli": { verb: "Talking to MCP" },
+	mkdir: { verb: "Creating", arg: "file" },
+	mv: { verb: "Moving files" },
+	node: { verb: "Running", arg: "script" },
+	npm: { verb: "Running npm" },
+	pi: { verb: "Spawning pi" },
+	pip: { verb: "Installing" },
+	pip3: { verb: "Installing" },
+	printf: { verb: "Printing" },
+	pwd: { verb: "Looking around" },
+	python: { verb: "Running", arg: "script" },
+	python3: { verb: "Running", arg: "script" },
+	pytest: { verb: "Running tests" },
+	rg: { verb: "Searching for", arg: "raw" },
+	rm: { verb: "Removing", arg: "file" },
+	rsync: { verb: "Syncing files" },
+	rustc: { verb: "Compiling" },
+	scp: { verb: "Copying files" },
+	sed: { verb: "Reading", arg: "file" },
+	set: { verb: "Setting up" },
+	shopt: { verb: "Setting up" },
+	ssh: { verb: "Connecting to", arg: "host" },
+	tail: { verb: "Reading", arg: "file" },
+	tmux: { verb: "Driving tmux" },
+	tree: { verb: "Listing", arg: "file" },
+	tsc: { verb: "Typechecking" },
+	until: { verb: "Looping" },
+	vitest: { verb: "Running tests" },
+	wc: { verb: "Counting", arg: "file" },
+	wget: { verb: "Fetching", arg: "host" },
+	which: { verb: "Looking for", arg: "raw" },
+	while: { verb: "Looping" },
+	yarn: { verb: "Running yarn" },
 };
 
 /** Programs whose argument says more than their name. */
@@ -123,7 +147,101 @@ function host(url: string): string {
 
 /** The name a path ends with: the part that says what the file is. */
 function baseName(path: string): string {
-	return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+	const parts = path.split(/[\\/]/).filter(Boolean);
+	const last = parts.pop() ?? path;
+	// A path ending in a dot names the directory before it, not the dot.
+	return last === "." || last === ".." ? (parts.pop() ?? last) : last;
+}
+
+/** The directory a path sits in, as the line can afford to show it. */
+function parentPath(path: string): string {
+	const parts = path.split(/[\\/]/).filter((part) => part && part !== "." && part !== "..");
+	return parts.slice(0, -1).slice(-2).join("/");
+}
+
+/** A quote pair around a shell word, kept out of the line. */
+function stripQuotes(text: string): string {
+	return text.replace(/^['"]|['"]$/g, "");
+}
+
+interface Segment {
+	/** The command itself, cut where the separator ends it. */
+	text: string;
+	/** The line from this command on, which is where a redirect names its file. */
+	rest: string;
+}
+
+/** The pieces of one line, split where one command ends and the next begins. */
+function segments(line: string): Segment[] {
+	const parts: Segment[] = [];
+	let quote = "";
+	let start = 0;
+	const push = (end: number) => parts.push({ text: line.slice(start, end), rest: line.slice(start) });
+	for (let i = 0; i < line.length; i++) {
+		const char = line[i]!;
+		if (quote) {
+			if (char === "\\") i++;
+			else if (char === quote) quote = "";
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			quote = char;
+			continue;
+		}
+		if (";|&<>".includes(char)) {
+			push(i);
+			start = i + 1;
+		}
+	}
+	push(line.length);
+	return parts;
+}
+
+/** Lines that set the shell up or only name a variable, leaving nothing to report. */
+const SETUP =
+	/^(set|export|shopt|umask|unset)\b|^(echo|printf)\b|^[A-Za-z_][A-Za-z0-9_]*=(\S*|"[^"]*"|'[^']*')\s*$/;
+
+/** Programs that write whatever a redirect points at. */
+const WRITERS = new Set(["cat", "echo", "printf", "tee"]);
+
+/**
+ * Flags whose next word is a value, so it is not the thing being worked on. They differ
+ * per program: `-n` is a line count to `head` and a line number to `rg`.
+ */
+const VALUED: Record<string, Set<string>> = {
+	curl: new Set(["-d", "-H", "-o", "-u", "-X", "--output"]),
+	deno: new Set(["-e", "--eval"]),
+	git: new Set(["-C", "-c"]),
+	grep: new Set(["-e", "--regexp"]),
+	head: new Set(["-c", "-n"]),
+	node: new Set(["-e", "--eval"]),
+	python: new Set(["-c", "-m"]),
+	python3: new Set(["-c", "-m"]),
+	rg: new Set(["-e", "--regexp", "-g"]),
+	scp: new Set(["-i", "-o", "-P"]),
+	ssh: new Set(["-F", "-i", "-l", "-o", "-p"]),
+	tail: new Set(["-c", "-n"]),
+};
+
+/**
+ * The first command in a script that says what the work is. Setup and navigation do not:
+ * a script opening with `set -e`, `export`, or `cd` would otherwise be reported as if that
+ * were the work. If it is all setup, the first of those is the best answer left.
+ */
+function workLine(command: string): Segment | undefined {
+	let skipped: Segment | undefined;
+	for (const raw of command.split("\n")) {
+		for (const part of segments(raw)) {
+			const line = part.text.trim();
+			if (!line || line.startsWith("#")) continue;
+			if (SETUP.test(line) || /^cd\b/.test(line)) {
+				skipped ??= { text: line, rest: part.rest };
+				continue;
+			}
+			return { text: line, rest: part.rest };
+		}
+	}
+	return skipped;
 }
 
 /** "Copying a.ts to tmp": the two paths, not just the fact that files moved. */
@@ -131,35 +249,129 @@ function transfer(verb: string, args: readonly string[]): string | undefined {
 	const paths = args.filter((token) => !token.startsWith("-"));
 	if (paths.length < 2) return undefined;
 	// The source is a file name, the destination a place: two segments say which tmp.
-	const destination = shortPath(paths[paths.length - 1]!);
+	const last = paths[paths.length - 1]!;
+	const destination = last === "." ? "here" : shortPath(last);
 	const sources = paths.slice(0, -1);
 	if (sources.length > 1) return `${verb} ${sources.length} files to ${destination}`;
 	const source = baseName(sources[0]!);
-	// The same name on both ends (a log pulled down, a symlink beside its target) does
-	// not need the destination spelled out again.
-	return source === baseName(destination) ? `${verb} ${source}` : `${verb} ${source} to ${destination}`;
+	if (source !== baseName(destination)) return `${verb} ${source} to ${destination}`;
+	// The same name on both ends (a log pulled down, a config copied home) cannot show
+	// direction by name, so the directory it lands in does.
+	const parent = last === "." ? "" : parentPath(last);
+	return parent ? `${verb} ${source} to ${parent}` : `${verb} ${source}`;
+}
+
+/** What the program and its arguments say, for the programs the table knows. */
+function programPhrase(program: string, args: readonly string[]): string | undefined {
+	const first = positional(program, args);
+
+	if (program === "sed") {
+		// `sed -n` prints and `sed -i` rewrites: the flag is the whole difference. The file
+		// is the last word, because the script before it is not a file name.
+		const editing = args.some((token) => /^-[a-zA-Z]*i/.test(token));
+		const file = args.filter((token) => !token.startsWith("-") && stripQuotes(token)).pop();
+		if (!file) return editing ? "Editing in place" : "Reading";
+		return `${editing ? "Editing" : "Reading"} ${shortPath(file)}`;
+	}
+
+	if (program === "find") {
+		const flag = args.findIndex((token) => token === "-name" || token === "-iname");
+		const pattern = flag === -1 ? undefined : args[flag + 1];
+		if (pattern) return `Finding ${stripQuotes(pattern)}`;
+		return first && first !== "." ? `Finding in ${shortPath(first)}` : "Finding";
+	}
+
+	const known = PROGRAMS[program];
+	if (!known) return undefined;
+	if (!first) return known.arg === "script" ? "Running a script" : known.verb;
+	if (!known.arg) return known.verb;
+	const subject =
+		known.arg === "file"
+			? shortPath(first)
+			: known.arg === "host"
+				? host(first)
+				: known.arg === "script"
+					? baseName(stripQuotes(first))
+					: stripQuotes(first);
+	return `${known.verb} ${subject}`;
+}
+
+/** The first argument that is a thing, not a flag or a flag's value. */
+function positional(program: string, args: readonly string[]): string | undefined {
+	const valued = VALUED[program];
+	let skipNext = false;
+	for (const token of args) {
+		if (skipNext) {
+			skipNext = false;
+			continue;
+		}
+		if (token.startsWith("-")) {
+			skipNext = valued?.has(token) === true;
+			continue;
+		}
+		return token;
+	}
+	return undefined;
 }
 
 /** A shell command as a phrase, from its program and subcommand. */
 function summarize(command: string): string {
-	const line = command.split("\n").find((part) => part.trim()) ?? "";
-	// Leading `VAR=value` and a `cd … &&` prologue say nothing about the work itself.
-	const stripped = line
-		.replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "")
-		.replace(/^cd\s+\S+\s*&&\s*/, "")
-		.trim();
+	// `VAR=value` and the setup lines say nothing about the work itself.
+	const work = workLine(command);
+	const stripped = (work?.text ?? "").replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "").trim();
+	if (!stripped) return "Running a command";
+	// Nothing but an assignment is left: the script sets something up and says no more.
+	if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(stripped)) return "Setting up";
 	const [head = "", ...rest] = stripped.split(/\s+/);
-	if (!head) return "Running a command";
-
 	const program = head.split(/[\\/]/).pop() ?? head;
-	const sub = rest.find((token) => !token.startsWith("-"));
-	const moved = TRANSFER[program] ? transfer(TRANSFER[program]!, rest) : undefined;
-	if (moved) return moved;
-	const known = (sub && SUBCOMMANDS[program]?.[sub]) || PROGRAMS[program];
+	const sub = positional(program, rest);
+
+	// `cat > file <<'EOF'` writes the file it names; it is not reading anything.
+	if (WRITERS.has(program)) {
+		const written = work?.rest.match(/>>?\s*(\S+)/)?.[1]?.replace(/[;&|]+$/, "");
+		if (written) return `Writing ${shortPath(stripQuotes(written))}`;
+	}
+
+	// `node -e "…"` names no file; the code itself is not worth showing.
+	if ((program === "node" || program === "python" || program === "python3" || program === "deno")
+		&& rest.some((token) => token === "-e" || token === "-c" || token === "--eval")) {
+		return "Running a snippet";
+	}
+
+	// `timeout 60 npm test` is the command it wraps, not a program called timeout.
+	if (program === "timeout") {
+		const duration = rest.findIndex((token) => /^\d+[smhd]?$/.test(token));
+		if (duration !== -1) return summarize(rest.slice(duration + 1).join(" "));
+	}
+
+	if (TRANSFER[program]) {
+		const moved = transfer(TRANSFER[program]!, rest);
+		if (moved) return moved;
+	}
+
+	const bySub = sub ? SUBCOMMANDS[program]?.[sub] : undefined;
+	if (bySub) return bySub;
+
+	const known = programPhrase(program, rest);
 	if (known) return known;
 	if (SECRET.test(stripped) || rest.some((token) => token.includes("="))) return `Running ${program}`;
 	return sub ? `Running ${program} ${sub}` : `Running ${program}`;
 }
+
+/** Tools with a verb of their own, apart from the file tools the switch below knows. */
+const TOOL_VERBS: Record<string, string> = {
+	codemode: "Running a script",
+	copy_path: "Copying",
+	fzf_select: "Picking a file",
+	get_search_content: "Reading the search results",
+	mkdir_path: "Creating",
+	move_path: "Moving",
+	process: "Running a process",
+	remove_directory: "Removing",
+	remove_file: "Removing",
+	request_secret: "Asking for a secret",
+	web_enable: "Enabling web access",
+};
 
 /** What the tool is doing, from its name and the arguments it was given. */
 function describe(toolName: string, args: unknown): string {
@@ -199,10 +411,17 @@ function describe(toolName: string, args: unknown): string {
 			const path = text("path");
 			return path ? `Listing ${shortPath(path)}` : "Listing the directory";
 		}
-		case "codemode":
-			return "Running a script";
-		case "subagent":
-			return "Waiting on a subagent";
+	}
+
+	// Every other tool names its verb in the table above; what it works on comes from
+	// whichever argument says it, so a copy still shows both ends.
+	const verb = TOOL_VERBS[toolName];
+	if (verb) {
+		const from = text("from") ?? text("source") ?? text("src");
+		const to = text("to") ?? text("destination") ?? text("dest") ?? text("target");
+		if (from && to) return `${verb} ${shortPath(from)} to ${shortPath(to)}`;
+		const subject = text("path") ?? text("file") ?? text("name");
+		return subject ? `${verb} ${shortPath(subject)}` : verb;
 	}
 
 	// Custom tools: the first argument that names what it works on is the best clue.
