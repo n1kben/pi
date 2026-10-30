@@ -25,6 +25,8 @@ export interface FetchPageOptions {
   render?: RenderMode;
   /** Render the page as plain fetched text instead of extracted markdown. */
   raw?: boolean;
+  /** Pi's tool cancellation signal, propagated into the fetch and the browser render. */
+  signal?: AbortSignal;
 }
 
 /** A failure the model can act on, with a suggestion for the next attempt. */
@@ -41,23 +43,27 @@ export class FetchError extends Error {
 const HTML_TYPES = ["text/html", "application/xhtml+xml", "application/xml", "text/xml"];
 const TEXT_TYPES = ["text/plain", "text/markdown", "application/json", "text/csv", "text/yaml", "application/yaml"];
 
+/** Responses above this are not prose, and they would sit in memory and in the cache. */
+const MAX_BYTES = 8 * 1024 * 1024;
+
 export async function fetchPage(url: string, options: FetchPageOptions): Promise<Page> {
-  const { settings } = options;
+  const { settings, signal } = options;
   const mode = options.render ?? settings.render;
 
   if (mode === "browser") {
-    const rendered = await renderPage(url, settings);
+    const rendered = await renderPage(url, settings, signal);
     if (options.raw) return rawTextPage(url, rendered.html, rendered.finalUrl, "browser");
     return extract(rendered.html, rendered.finalUrl, "browser", settings);
   }
 
   let http: HttpResult;
   try {
-    http = await fetchOverHttp(url, settings);
+    http = await fetchOverHttp(url, settings, signal);
   } catch (error) {
-    // A bot wall on the plain fetch usually lifts in a real browser.
-    if (mode === "http" || !isBotWall(error)) throw error;
-    const rendered = await renderPage(url, settings).catch(() => undefined);
+    // A bot wall on the plain fetch usually lifts in a real browser, but a
+    // cancelled fetch is not a failure to work around.
+    if (mode === "http" || signal?.aborted || !isBotWall(error)) throw error;
+    const rendered = await renderPage(url, settings, signal).catch(() => undefined);
     if (!rendered) throw error;
     if (options.raw) return rawTextPage(url, rendered.html, rendered.finalUrl, "browser");
     return extract(rendered.html, rendered.finalUrl, "browser", settings);
@@ -70,7 +76,10 @@ export async function fetchPage(url: string, options: FetchPageOptions): Promise
 
   const thin = isThinPage(page, settings);
   if (thin || http.blocked) {
-    const rendered = await renderPage(url, settings).catch(() => undefined);
+    const rendered = await renderPage(url, settings, signal).catch((error) => {
+      if (signal?.aborted) throw error;
+      return undefined;
+    });
     if (rendered) {
       const fromBrowser = await extract(rendered.html, rendered.finalUrl, "browser", settings);
       // A browser render that extracts less than the plain fetch is usually a
@@ -91,14 +100,13 @@ type HttpResult =
   | { kind: "html"; html: string; finalUrl: string; blocked: boolean }
   | { kind: "text"; body: string; finalUrl: string };
 
-async function fetchOverHttp(url: string, settings: WebSettings): Promise<HttpResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+async function fetchOverHttp(url: string, settings: WebSettings, signal?: AbortSignal): Promise<HttpResult> {
+  const timeout = AbortSignal.timeout(settings.timeoutMs);
   let response: Response;
   try {
     response = await fetch(url, {
       redirect: "follow",
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       headers: {
         "User-Agent": settings.userAgent,
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -106,20 +114,19 @@ async function fetchOverHttp(url: string, settings: WebSettings): Promise<HttpRe
       },
     });
   } catch (error) {
+    if (signal?.aborted) throw fetchCancelled(url);
     const name = (error as Error).name;
     if (name === "AbortError" || name === "TimeoutError") {
       throw new FetchError(`Timed out after ${settings.timeoutMs}ms fetching ${url}`, "Retry, or use render: \"browser\".");
     }
     throw new FetchError(`Could not reach ${url}: ${(error as Error).message}`);
-  } finally {
-    clearTimeout(timer);
   }
 
   if (!response.ok) throw httpError(response, url);
 
   const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
   if (TEXT_TYPES.some((type) => contentType.includes(type))) {
-    return { kind: "text", body: await response.text(), finalUrl: response.url || url };
+    return { kind: "text", body: await readBody(response, url, settings, signal), finalUrl: response.url || url };
   }
   if (contentType && !HTML_TYPES.some((type) => contentType.includes(type))) {
     throw new FetchError(
@@ -127,9 +134,62 @@ async function fetchOverHttp(url: string, settings: WebSettings): Promise<HttpRe
       "Only HTML, XML, and plain text pages are extracted. Fetch binaries with bash instead.",
     );
   }
-  const html = await response.text();
+  const html = await readBody(response, url, settings, signal);
   // A 200 with almost no markup is a JS shell or a bot wall; the caller escalates.
   return { kind: "html", html, finalUrl: response.url || url, blocked: html.length < 2000 };
+}
+
+/**
+ * Read the body with a byte ceiling: `response.text()` on a multi-gigabyte URL
+ * buffers the whole thing, and the cache would keep it.
+ */
+async function readBody(
+  response: Response,
+  url: string,
+  settings: WebSettings,
+  signal?: AbortSignal,
+): Promise<string> {
+  const declared = Number(response.headers.get("content-length") ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > MAX_BYTES) throw tooLarge(url, declared);
+
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw tooLarge(url, total);
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    // The timeout fires while the body is streaming, so the abort surfaces here.
+    if (signal?.aborted) throw fetchCancelled(url);
+    if (error instanceof FetchError) throw error;
+    const name = (error as Error).name;
+    if (name === "AbortError" || name === "TimeoutError") {
+      throw new FetchError(`Timed out after ${settings.timeoutMs}ms fetching ${url}`, "Retry, or use render: \"browser\".");
+    }
+    throw new FetchError(`Could not read ${url}: ${(error as Error).message}`);
+  }
+  if (signal?.aborted) throw fetchCancelled(url);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function tooLarge(url: string, bytes: number): FetchError {
+  return new FetchError(
+    `Response from ${url} is ${(bytes / 1024 / 1024).toFixed(1)}MB, over the ${MAX_BYTES / 1024 / 1024}MB limit`,
+    "Large responses are not extracted. Download the file with bash instead.",
+  );
+}
+
+function fetchCancelled(url: string): FetchError {
+  return new FetchError(`Fetch cancelled for ${url}`);
 }
 
 function httpError(response: Response, url: string): FetchError {

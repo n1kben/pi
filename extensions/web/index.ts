@@ -174,11 +174,16 @@ export default function webExtension(pi: ExtensionAPI): void {
 
       let page: Page;
       try {
-        page = await fetchPage(url, { settings, render: params.render as RenderMode | undefined, raw: params.raw });
+        page = await fetchPage(url, {
+          settings,
+          render: params.render as RenderMode | undefined,
+          raw: params.raw,
+          signal: ctx.signal,
+        });
       } catch (error) {
         // A stale page beats no page: report it with the failure so the model
-        // can judge whether the freshness matters.
-        if (cached) {
+        // can judge whether the freshness matters. A cancelled call is not a failure.
+        if (cached && !ctx.signal?.aborted) {
           const reason = error instanceof Error ? error.message : String(error);
           const stalePage = { ...cached.entry, via: "cache" as const };
           return fetchResult(stalePage, settings, cached.entry.fetchedAt, params.max_chars, `Refetch failed (${reason}); serving the cached copy.`);
@@ -269,7 +274,7 @@ async function fetchContents(
         const page =
           cached && !cached.stale
             ? { ...cached.entry, via: "cache" as const }
-            : await fetchPage(url, { settings, render: render as RenderMode | undefined }).then(async (fetched) => {
+            : await fetchPage(url, { settings, render: render as RenderMode | undefined, signal }).then(async (fetched) => {
                 if (fetched.wordCount >= settings.minWords) {
                   await writeCache({ ...fetched, fetchedAt: Date.now() }, settings);
                 }
@@ -383,11 +388,13 @@ function normalizeUrl(input: string): string {
   return url.toString();
 }
 
+/** Label an abort that surfaced as an otherwise opaque fetch or browser error. */
 async function withSignalHint(error: unknown, signal: AbortSignal | undefined): Promise<Error> {
-  if (signal?.aborted && error instanceof FetchError) {
-    return new FetchError(`${error.message} (cancelled)`, error.hint);
+  const message = error instanceof Error ? error.message : String(error);
+  if (!signal?.aborted || /cancel/i.test(message)) {
+    return error instanceof Error ? error : new Error(message);
   }
-  return error instanceof Error ? error : new Error(String(error));
+  return new FetchError(`${message} (cancelled)`, error instanceof FetchError ? error.hint : undefined);
 }
 
 function clamp(value: number, min: number, max: number): number {

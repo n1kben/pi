@@ -54,7 +54,7 @@ Content fetches run three at a time and reuse the page cache, so repeated search
 
 ### How the page is extracted
 
-1. Plain HTTP fetch with a browser User-Agent.
+1. Plain HTTP fetch with a browser User-Agent. Bodies are streamed and capped at 8MB, so a huge response fails with a hint instead of buffering into memory and the cache.
 2. HTML → `linkedom` DOM → Defuddle → Markdown, metadata (title, author, published, site).
    - Defuddle sometimes returns empty Markdown while its cleaned content is intact. Markdown is then rebuilt locally with Turndown + GFM, unless the content is already Markdown (detected by headings or fences), in which case it is used as-is.
    - If the extraction is near-empty (under 25 words or 120 characters), a second relaxed pass disables Defuddle's boilerplate heuristics (`removeContentPatterns`, `removeLowScoring`, selector removal). This recovers listing and card-grid pages that look like navigation to the defaults.
@@ -63,6 +63,10 @@ Content fetches run three at a time and reuse the page cache, so repeated search
 4. Pages that still extract fewer than 20 characters raise an error instead of returning an empty page, and a result under `minWords` carries a short-extraction notice.
 
 Browser resolution order: `chrome` → `msedge` → Playwright's bundled `chromium`. On a VPS without Chrome, run `npx playwright-core install chromium` once (add `--with-deps` on a bare Linux box). Images, media, and fonts are blocked for a cheap render, and one browser is shared per session and closed on shutdown.
+
+Readiness is content-based, not `networkidle`: the render polls the page text every 250ms and returns once it has been unchanged for 1s (3s while the page still shows less than 200 characters, which is how a JS shell looks before it paints). Static pages settle in about a second, and a shell that hydrates late still gets replaced. The wait is capped at `browserTimeoutMs`, or 10s, whichever is smaller.
+
+Both tools honour pi's cancellation signal: aborting a `web_fetch` closes the browser context or aborts the HTTP request immediately.
 
 Non-HTML responses: plain text, Markdown, JSON, CSV, and XML are returned as-is; other content types (PDF, images) produce an actionable error instead of a partial extraction.
 
