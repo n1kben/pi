@@ -1,3 +1,4 @@
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { resolveAuth } from "./auth.ts";
 import { SAMPLE_RATE } from "./audio.ts";
 import { presetFor } from "./providers.ts";
@@ -48,6 +49,8 @@ export class TranscriptionError extends Error {
 }
 
 type TranscribeOptions = {
+  /** pi's model runtime, which resolves the provider key the way a model request would. */
+  registry: ModelRegistry;
   signal?: AbortSignal;
   /** Overrides the configured language (used by the settings test). */
   language?: string;
@@ -60,7 +63,7 @@ type TranscribeOptions = {
 export async function transcribeAudio(
   pcm: Float32Array,
   settings: VoiceSettings,
-  options: TranscribeOptions = {},
+  options: TranscribeOptions,
 ): Promise<Transcript> {
   if (!settings.baseUrl) {
     throw new TranscriptionError("No base URL configured. Set provider/baseUrl in voice.json.");
@@ -79,7 +82,7 @@ export async function transcribeAudio(
   if (settings.prompt.trim()) form.append("prompt", settings.prompt.trim());
 
   const preset = presetFor(settings.provider);
-  const auth = await resolveAuth(preset);
+  const auth = await resolveAuth(preset, options.registry);
   // A base URL pinned in pi's provider config wins, unless the user pointed the
   // preset somewhere else in voice.json.
   const configuredElsewhere = settings.baseUrl !== preset.baseUrl;

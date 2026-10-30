@@ -1,13 +1,14 @@
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { readStoredCredentialRaw, type ProviderPreset } from "./providers.ts";
+import { readStoredCredential, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ProviderPreset } from "./providers.ts";
 
 /**
  * Credentials exactly as pi resolves them for its own requests: the sign-in
  * stored in `auth.json` (OAuth refreshed when it is close to expiring), then
  * provider environment variables, then `models.json` provider config.
  *
- * One extension-wide runtime, created on first use: it costs a few milliseconds
- * and never touches the network.
+ * `ctx.modelRegistry` is the runtime pi already built, so asking it costs no
+ * startup work and sees `/login` and `!command` keys the same way a model
+ * request would.
  */
 export type ResolvedAuth = {
   apiKey?: string;
@@ -18,34 +19,21 @@ export type ResolvedAuth = {
   source?: string;
 };
 
-let runtimePromise: Promise<ModelRuntime | undefined> | undefined;
-
-function piRuntime(): Promise<ModelRuntime | undefined> {
-  runtimePromise ??= ModelRuntime.create({
-    refreshOnCreate: false,
-    allowModelNetwork: false,
-  }).catch(() => undefined);
-  return runtimePromise;
-}
-
 /** Resolves without throwing; a missing credential is an undefined `apiKey`. */
-export async function resolveAuth(preset: ProviderPreset): Promise<ResolvedAuth> {
+export async function resolveAuth(preset: ProviderPreset, registry: ModelRegistry): Promise<ResolvedAuth> {
   if (preset.id !== "custom") {
-    const runtime = await piRuntime();
-    if (runtime) {
-      try {
-        const result = await runtime.getAuth(preset.id);
-        if (result?.auth.apiKey) {
-          return {
-            apiKey: result.auth.apiKey,
-            ...(result.auth.headers ? { headers: result.auth.headers as Record<string, string> } : {}),
-            ...(result.auth.baseUrl ? { baseUrl: result.auth.baseUrl } : {}),
-            ...(result.source ? { source: result.source } : {}),
-          };
-        }
-      } catch {
-        // Fall through to the direct reads below.
+    try {
+      const result = await registry.getProviderAuth(preset.id);
+      if (result?.auth.apiKey) {
+        return {
+          apiKey: result.auth.apiKey,
+          ...(result.auth.headers ? { headers: result.auth.headers as Record<string, string> } : {}),
+          ...(result.auth.baseUrl ? { baseUrl: result.auth.baseUrl } : {}),
+          ...(result.source ? { source: result.source } : {}),
+        };
       }
+    } catch {
+      // Fall through to the direct reads below.
     }
   }
 
@@ -55,6 +43,19 @@ export async function resolveAuth(preset: ProviderPreset): Promise<ResolvedAuth>
     const value = process.env[name]?.trim();
     if (value) return { apiKey: value, source: name };
   }
-  const stored = readStoredCredentialRaw(preset);
+  const stored = preset.authKey ? storedKey(readStoredCredential(preset.authKey)) : undefined;
   return stored ? { apiKey: stored, source: "auth.json" } : {};
+}
+
+/** `api_key` and OAuth credentials, plus the plain-string shape older files used. */
+function storedKey(credential: unknown): string | undefined {
+  if (typeof credential === "string") return credential.trim() || undefined;
+  if (!credential || typeof credential !== "object") return undefined;
+
+  const entry = credential as Record<string, unknown>;
+  for (const field of ["key", "access", "apiKey"]) {
+    const value = entry[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
 }

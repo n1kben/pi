@@ -24,6 +24,16 @@ function shellBlue(text: string): string {
 	return `\x1b[34m${text}\x1b[39m`;
 }
 
+function shellGreen(text: string): string {
+	return `\x1b[32m${text}\x1b[39m`;
+}
+
+/** The checkout's branch, which pi's footer data resolves and watches itself. */
+function gitBranchText(footerData: ReadonlyFooterDataProvider): string {
+	const branch = footerData.getGitBranch();
+	return branch ? shellGreen(`(${branch})`) : "";
+}
+
 function contextUsageText(ctx: ExtensionContext, theme: Theme): string {
 	const usage = ctx.getContextUsage();
 	const tokens = usage?.tokens ?? null;
@@ -100,7 +110,11 @@ function renderFooterLine(
 	if (width <= 0) return "";
 
 	const ellipsis = theme.fg("dim", "...");
-	const leftParts = [shellBlue(formatFolder(ctx.cwd)), extensionStatusesText(footerData, theme)].filter(Boolean);
+	const leftParts = [
+		shellBlue(formatFolder(ctx.cwd)),
+		gitBranchText(footerData),
+		extensionStatusesText(footerData, theme),
+	].filter(Boolean);
 	const left = leftParts.join(" ");
 	const credits = creditsText(footerData, theme);
 	// Right side order: tokens, upstream/provider/model, thinking, cost last.
@@ -131,9 +145,12 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const requestRender = () => tui.requestRender();
 			requestFooterRender = requestRender;
+			// Checkout changes (a rebase, a branch switch in another terminal) need no turn.
+			const unsubscribeBranch = footerData.onBranchChange(requestRender);
 
 			return {
 				dispose() {
+					unsubscribeBranch();
 					if (requestFooterRender === requestRender) {
 						requestFooterRender = undefined;
 					}

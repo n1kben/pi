@@ -1,16 +1,16 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { execFileSync } from "node:child_process";
+
+type Exec = ExtensionAPI["exec"];
 
 const WIDGET_ID = "links";
 const MAX_LINKS_PER_GROUP = 8;
 const WIDGET_GROUPS = ["Issues", "PRs"] as const;
 
 type WidgetGroup = (typeof WIDGET_GROUPS)[number];
-type LinkGroup = WidgetGroup | "URL";
 
 type Link = {
   key: string;
-  group: LinkGroup;
+  group: WidgetGroup;
   label: string;
   url: string;
 };
@@ -79,14 +79,11 @@ function normalizeRepo(owner: string, repo: string): string {
  * The host may carry an SSH alias (`git@github.com-work:owner/repo.git`, the usual
  * second-account setup), so whatever follows `github.com` is still the same host.
  */
-function currentGitHubRepo(cwd: string): string | null {
+async function currentGitHubRepo(exec: Exec, cwd: string): Promise<string | null> {
   try {
-    const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    const match = remote.match(/github\.com[^/]*[:/]([^/]+)\/([^/]+?)(?:\.git)?$/i);
+    const { stdout, code } = await exec("git", ["config", "--get", "remote.origin.url"], { cwd, timeout: 5000 });
+    if (code !== 0) return null;
+    const match = stdout.trim().match(/github\.com[^/]*[:/]([^/]+)\/([^/]+?)(?:\.git)?$/i);
     return match ? normalizeRepo(match[1]!, match[2]!) : null;
   } catch {
     return null;
@@ -102,14 +99,14 @@ function isTemplateUrl(url: string): boolean {
   return value.includes("%7b") || value.includes("%7d") || value.includes("${");
 }
 
-function* urlsIn(text: string, hostname?: string): Generator<URL> {
+function* urlsIn(text: string, hostname: string): Generator<URL> {
   for (const match of text.matchAll(/https?:\/\/[^\s<>()]+/gi)) {
     const rawUrl = trimUrl(match[0]!);
     if (isTemplateUrl(rawUrl)) continue;
 
     try {
       const url = new URL(rawUrl);
-      if (hostname && url.hostname !== hostname) continue;
+      if (url.hostname !== hostname) continue;
       yield url;
     } catch {
       // Ignore malformed URLs from streamed/generated text.
@@ -154,32 +151,6 @@ function collectLinearLinks(text: string): Link[] {
 
 function collectWidgetLinks(text: string, currentRepo: string | undefined): Link[] {
   return [...collectGitHubLinks(text, currentRepo), ...collectLinearLinks(text)];
-}
-
-function genericUrlLabel(url: URL): string {
-  const path = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
-  return `${url.hostname}${path}`;
-}
-
-function collectAllLinks(text: string, currentRepo: string | undefined): Link[] {
-  const links = new Map<string, Link>();
-
-  for (const link of collectWidgetLinks(text, currentRepo)) {
-    links.set(link.url, link);
-  }
-
-  for (const url of urlsIn(text)) {
-    const normalized = url.toString();
-    if (links.has(normalized)) continue;
-    links.set(normalized, {
-      key: normalized,
-      group: "URL",
-      label: genericUrlLabel(url),
-      url: normalized,
-    });
-  }
-
-  return [...links.values()];
 }
 
 function renderGroup(
@@ -228,39 +199,19 @@ function renderLinks(links: Link[], theme: ExtensionContext["ui"]["theme"], widt
     .filter((line): line is string => typeof line === "string");
 }
 
-function openUrl(url: string): void {
-  if (process.platform === "darwin") {
-    execFileSync("open", [url], { stdio: "ignore" });
-    return;
-  }
-  if (process.platform === "win32") {
-    execFileSync("cmd", ["/c", "start", "", url], { stdio: "ignore" });
-    return;
-  }
-  execFileSync("xdg-open", [url], { stdio: "ignore" });
-}
-
 export default function (pi: ExtensionAPI) {
-  /** Undefined until the first lookup, null once the checkout is known to have no GitHub remote. */
-  let currentRepo: string | null | undefined;
+  const exec: Exec = (command, args, options) => pi.exec(command, args, options);
+  /** Resolved once per session; undefined while unknown, null when the checkout has no GitHub remote. */
+  let currentRepo: string | null = null;
 
   function chatTextForContext(ctx: ExtensionContext, extraText = ""): string {
     return `${branchText(ctx)}\n${extraText}`;
   }
 
-  /**
-   * Resolved once per session. `??=` cannot do this: a null (no GitHub remote) is nullish
-   * too, so every streamed delta would look again, and each lookup is a blocking spawn.
-   */
-  function getCurrentRepo(ctx: ExtensionContext): string | undefined {
-    if (currentRepo === undefined) currentRepo = currentGitHubRepo(ctx.cwd);
-    return currentRepo ?? undefined;
-  }
-
   function update(ctx: ExtensionContext, extraText = "") {
     if (!ctx.hasUI) return;
 
-    const links = collectWidgetLinks(chatTextForContext(ctx, extraText), getCurrentRepo(ctx));
+    const links = collectWidgetLinks(chatTextForContext(ctx, extraText), currentRepo ?? undefined);
     if (links.length === 0) {
       ctx.ui.setWidget(WIDGET_ID, undefined);
       return;
@@ -274,8 +225,8 @@ export default function (pi: ExtensionAPI) {
     }), { placement: "aboveEditor" });
   }
 
-  pi.on("session_start", (_event, ctx) => {
-    currentRepo = currentGitHubRepo(ctx.cwd);
+  pi.on("session_start", async (_event, ctx) => {
+    currentRepo = await currentGitHubRepo(exec, ctx.cwd);
     update(ctx);
   });
 
@@ -285,35 +236,4 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("message_end", (_event, ctx) => update(ctx));
-
-  pi.registerCommand("links", {
-    description: "Select a detected link and open it in the browser",
-    handler: async (_args, ctx) => {
-      const links = collectAllLinks(chatTextForContext(ctx), getCurrentRepo(ctx));
-      if (links.length === 0) {
-        ctx.ui.notify("No links found", "info");
-        return;
-      }
-
-      const counts = new Map<string, number>();
-      for (const link of links) counts.set(link.label, (counts.get(link.label) ?? 0) + 1);
-
-      const labels = links.map((link) => {
-        const label = (counts.get(link.label) ?? 0) > 1 ? `${link.group}: ${link.label}` : link.label;
-        return `${label}  ${link.url}`;
-      });
-
-      const choice = await ctx.ui.select("Open link", labels);
-      if (!choice) return;
-
-      const link = links[labels.indexOf(choice)];
-      if (!link) return;
-
-      try {
-        openUrl(link.url);
-      } catch (error) {
-        ctx.ui.notify(`Could not open link: ${(error as Error).message}`, "error");
-      }
-    },
-  });
 }

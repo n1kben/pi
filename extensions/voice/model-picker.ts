@@ -11,7 +11,7 @@ import { readSettings, updateSettings } from "./settings.ts";
 export async function pickModel(ctx: ExtensionCommandContext): Promise<void> {
   const { settings } = await readSettings();
   const preset = presetFor(settings.provider);
-  const { apiKey } = await resolveAuth(preset);
+  const { apiKey } = await resolveAuth(preset, ctx.modelRegistry);
   const models = await listModels(preset, apiKey);
 
   if (models.length === 0) {

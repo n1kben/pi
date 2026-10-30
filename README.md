@@ -15,16 +15,13 @@ make install
 ```
 
 `make install` symlinks `extensions/`, `prompts/`, `themes/`,
-`keybindings.json`, `settings.json`, and `models.json` into `~/.pi/agent`, and
-links the `subagent` CLI into `~/.pi/agent/bin` (expected to be on `PATH`). On
+`keybindings.json`, `settings.json`, and `models.json` into `~/.pi/agent`. On
 machines without make, run `./install.sh install` directly. `make uninstall`
 (or `./install.sh uninstall`) removes the links.
 
 ## Layout
 
 - `extensions/` — pi extensions (TypeScript, loaded directly by pi).
-  `extensions/subagent/` is a vendored copy of [badlogic/pi-subagent](https://github.com/badlogic/pi-subagent),
-  including its `subagent` CLI and skill; see its README for local changes.
   `extensions/voice/` is cloud speech-to-text (OpenRouter/OpenAI-compatible
   transcription API, `Ctrl+Space` to dictate); it needs `npm install` once for the
   native recorder — see its README.

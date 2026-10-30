@@ -14,10 +14,6 @@ type StashState = {
   prompts: StashedPrompt[];
 };
 
-const CUSTOM_TYPE = "stash-state";
-const LEGACY_CUSTOM_TYPE = "prompt-stash-state";
-const STATUS_ID = "stash";
-const WIDGET_ID = "stash";
 const STATE_VERSION = 1;
 
 function makeId() {
@@ -53,11 +49,6 @@ export default function (pi: ExtensionAPI) {
     return sessionFile ? `${sessionFile}.stash.json` : undefined;
   }
 
-  function legacyStateFile(ctx: ExtensionContext) {
-    const sessionFile = ctx.sessionManager.getSessionFile();
-    return sessionFile ? `${sessionFile}.prompt-stash.json` : undefined;
-  }
-
   function parseState(state: Partial<StashState> | undefined) {
     if (!Array.isArray(state?.prompts)) return [];
     return state.prompts.filter((p): p is StashedPrompt =>
@@ -65,6 +56,10 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
+  /**
+   * A sidecar file next to the session, not `pi.appendEntry()`: entries are
+   * append-only and a stash has to drop one prompt without rewriting history.
+   */
   function persist(ctx: ExtensionContext) {
     const file = stateFile(ctx);
     if (!file) return;
@@ -75,13 +70,6 @@ export default function (pi: ExtensionAPI) {
     renameSync(tmp, file);
   }
 
-  function updateBadge(ctx: ExtensionContext) {
-    if (!ctx.hasUI) return;
-
-    ctx.ui.setStatus(STATUS_ID, undefined);
-    ctx.ui.setWidget(WIDGET_ID, undefined);
-  }
-
   function restore(ctx: ExtensionContext) {
     prompts = [];
 
@@ -89,7 +77,6 @@ export default function (pi: ExtensionAPI) {
     if (file) {
       try {
         prompts = parseState(JSON.parse(readFileSync(file, "utf8")) as Partial<StashState>);
-        updateBadge(ctx);
         return;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -97,28 +84,6 @@ export default function (pi: ExtensionAPI) {
         }
       }
     }
-
-    const legacyFile = legacyStateFile(ctx);
-    if (legacyFile) {
-      try {
-        prompts = parseState(JSON.parse(readFileSync(legacyFile, "utf8")) as Partial<StashState>);
-        if (prompts.length > 0) persist(ctx);
-        updateBadge(ctx);
-        return;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          ctx.ui.notify(`Could not read legacy stash: ${(error as Error).message}`, "warning");
-        }
-      }
-    }
-
-    // One-time migration/fallback for old stash state that was stored as branch-local custom entries.
-    for (const entry of ctx.sessionManager.getEntries()) {
-      if (entry.type !== "custom" || (entry.customType !== CUSTOM_TYPE && entry.customType !== LEGACY_CUSTOM_TYPE)) continue;
-      prompts = parseState(entry.data as Partial<StashState> | undefined);
-    }
-    if (prompts.length > 0) persist(ctx);
-    updateBadge(ctx);
   }
 
   async function stashText(ctx: ExtensionContext, text: string) {
@@ -130,7 +95,6 @@ export default function (pi: ExtensionAPI) {
     prompts.unshift({ id: makeId(), text, createdAt: Date.now() });
     persist(ctx);
     ctx.ui.setEditorText("");
-    updateBadge(ctx);
     ctx.ui.notify(`Stashed prompt (${prompts.length} total)`, "info");
   }
 
@@ -198,7 +162,6 @@ export default function (pi: ExtensionAPI) {
       if (!ok) return;
       prompts = [];
       persist(ctx);
-      updateBadge(ctx);
       ctx.ui.notify("Stash cleared", "info");
       return;
     }
@@ -214,7 +177,6 @@ export default function (pi: ExtensionAPI) {
     if (result.action === "pop" || result.action === "drop") {
       prompts.splice(index, 1);
       persist(ctx);
-      updateBadge(ctx);
       ctx.ui.notify(result.action === "pop" ? "Popped prompt from stash" : "Dropped prompt", "info");
     }
   }
@@ -258,23 +220,7 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.registerCommand("stash", {
-    description: "Stash current editor/args, or manage stash when editor is empty",
-    handler: async (args, ctx) => {
-      const text = args.trim() || ctx.ui.getEditorText();
-      if (text.trim()) await stashText(ctx, text);
-      else await manageStash(ctx);
-    },
-  });
-
-
   // Ctrl+S is handled by the custom editor above. Do not also register it as
   // an extension shortcut: pi uses Ctrl+S for built-in save actions in other
   // views, and registering it here triggers an extension shortcut conflict.
-  pi.registerShortcut("ctrl+shift+o", {
-    description: "Manage stashed prompts",
-    handler: async (ctx) => {
-      await manageStash(ctx);
-    },
-  });
 }

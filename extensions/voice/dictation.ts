@@ -92,7 +92,7 @@ export class Dictation {
     if (warning) ctx.ui.notify(warning, "warning");
 
     const preset = presetFor(settings.provider);
-    const { apiKey } = await resolveAuth(preset);
+    const { apiKey } = await resolveAuth(preset, ctx.modelRegistry);
     if (!apiKey && preset.id !== "custom") {
       ctx.ui.notify(`Voice is not signed in to ${preset.label}. ${apiKeyHint(preset)}`, "error");
       return;
@@ -196,7 +196,7 @@ export class Dictation {
     const abort = new AbortController();
     this.transcribing = abort;
     try {
-      const result = await transcribeAudio(pcm, settings, { signal: abort.signal });
+      const result = await transcribeAudio(pcm, settings, { registry: ctx.modelRegistry, signal: abort.signal });
       if (this.disposed) return;
       const tookSeconds = (performance.now() - startedAt) / 1000;
 

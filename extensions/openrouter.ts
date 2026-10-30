@@ -14,17 +14,17 @@
  *
  * Commands:
  *   /credits   wallet detail (purchased, used, remaining) + usage today/week/month
- *   /upstream  last 10 requests (provider, time, generation id, cost)
  *
- * The API key is read from OPENROUTER_API_KEY or ~/.pi/agent/auth.json, so the
- * balance only appears when an OpenRouter key is configured.
+ * The API key is the one pi resolves for the OpenRouter provider (environment,
+ * auth.json including `!command` keys, OAuth, models.json), so the balance only
+ * appears when an OpenRouter key is configured.
  *
  * Tunables (env):
  *   PI_OPENROUTER_CREDITS_MODE   left | spent | both   (default: left)
  *   PI_OPENROUTER_CREDITS_POLL_MS refresh interval      (default: 120000)
  */
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const AGENT_DIR = getAgentDir();
@@ -35,14 +35,12 @@ const UPSTREAM_STATUS_KEY = "openrouter-upstream";
 const UPSTREAM_STATE_TYPE = "openrouter-upstream";
 
 const CACHE_FILE = join(AGENT_DIR, "openrouter-credits.json");
-const LOG_FILE = join(AGENT_DIR, "openrouter-upstream.log");
 
 const CREDITS_URL = "https://openrouter.ai/api/v1/credits";
 const KEY_URL = "https://openrouter.ai/api/v1/key";
 const POLL_MS = Math.max(30_000, Number(process.env.PI_OPENROUTER_CREDITS_POLL_MS ?? 120_000));
 /** Don't hit the API more often than this, even on turn_end. */
 const MIN_FETCH_INTERVAL_MS = 30_000;
-const HISTORY = 10;
 
 type Mode = "left" | "spent" | "both";
 
@@ -66,16 +64,10 @@ interface KeyUsage {
 }
 
 interface Request {
-	at: string;
 	model: string;
 	provider: string;
+	/** Grouping key for the stream events that belong to one request. */
 	generationId?: string;
-	cost?: number;
-	promptTokens?: number;
-	completionTokens?: number;
-	cachedTokens?: number;
-	ttftMs?: number;
-	durationMs?: number;
 }
 
 interface PersistedProvider {
@@ -91,10 +83,8 @@ let timer: ReturnType<typeof setInterval> | undefined;
 /** Whether the selected model goes through OpenRouter; gates the balance. */
 let active = false;
 
-/** Last request of this session. Replaces `current` in the old upstream-only extension. */
+/** Last request of this session. */
 let request: Request | undefined;
-let requestLogged = false;
-let requestStartedAt: number | undefined;
 /** Last provider seen in this session; survives /reload via the session entry. */
 let displayedProvider: string | undefined;
 /** Provider already written to the session, to avoid one entry per turn. */
@@ -108,23 +98,9 @@ function isOpenRouter(model: { provider?: string } | undefined): boolean {
 // Wallet balance
 // ---------------------------------------------------------------------------
 
-function apiKey(): string | undefined {
-	const fromEnv = process.env.OPENROUTER_API_KEY?.trim();
-	if (fromEnv) return fromEnv;
-
-	try {
-		const auth = JSON.parse(readFileSync(join(AGENT_DIR, "auth.json"), "utf8")) as Record<string, unknown>;
-		const entry = auth.openrouter;
-		if (typeof entry === "string") return entry;
-		if (entry && typeof entry === "object") {
-			const value = (entry as Record<string, unknown>).access ?? (entry as Record<string, unknown>).key;
-			// `!command` keys are resolved by pi itself; don't try to run them here.
-			if (typeof value === "string" && value && !value.startsWith("!")) return value;
-		}
-	} catch {
-		// No key file / unreadable: indicator stays hidden.
-	}
-	return undefined;
+/** Exactly the key pi sends to OpenRouter, however it was configured. */
+function apiKey(ctx: ExtensionContext): Promise<string | undefined> {
+	return ctx.modelRegistry.getApiKeyForProvider(PROVIDER);
 }
 
 function loadCache(): Credits | undefined {
@@ -185,7 +161,7 @@ function publishCredits(ctx: ExtensionContext): void {
 }
 
 async function refresh(ctx: ExtensionContext, force = false): Promise<void> {
-	const key = apiKey();
+	const key = await apiKey(ctx);
 	if (!key) {
 		credits = undefined;
 		publishCredits(ctx);
@@ -221,8 +197,8 @@ async function refresh(ctx: ExtensionContext, force = false): Promise<void> {
 	return inflight;
 }
 
-async function fetchKeyUsage(): Promise<KeyUsage | undefined> {
-	const key = apiKey();
+async function fetchKeyUsage(ctx: ExtensionContext): Promise<KeyUsage | undefined> {
+	const key = await apiKey(ctx);
 	if (!key) return undefined;
 	const body = await requestJson(KEY_URL, key);
 	const data = body?.data as Record<string, unknown> | undefined;
@@ -244,14 +220,6 @@ function refreshIfActive(ctx: ExtensionContext, force = false): void {
 // ---------------------------------------------------------------------------
 // Upstream provider
 // ---------------------------------------------------------------------------
-
-function record(entry: Request): void {
-	try {
-		appendFileSync(LOG_FILE, `${JSON.stringify(entry)}\n`);
-	} catch {
-		// Logging must never break a request.
-	}
-}
 
 /** Latest provider recorded on this session's current branch, if any. */
 function persistedState(ctx: ExtensionContext): PersistedProvider | undefined {
@@ -292,8 +260,6 @@ export default function (pi: ExtensionAPI) {
 
 		// Session state is fresh here: in-memory tracking may belong to a previous session.
 		request = undefined;
-		requestLogged = false;
-		requestStartedAt = undefined;
 		displayedProvider = persistedState(ctx)?.provider;
 		persistedProvider = displayedProvider;
 
@@ -328,10 +294,6 @@ export default function (pi: ExtensionAPI) {
 	// Costs land on turn_end: refresh (throttled) so the balance follows spending.
 	pi.on("turn_end", async (_event, ctx) => refreshIfActive(ctx));
 
-	pi.on("before_provider_request", async () => {
-		requestStartedAt = Date.now();
-	});
-
 	pi.on("provider_stream_event", async (event, ctx) => {
 		if (!isOpenRouter(event)) return;
 		const data = event.data as Record<string, unknown> | undefined;
@@ -343,32 +305,19 @@ export default function (pi: ExtensionAPI) {
 		const generationId = typeof data.id === "string" ? data.id : undefined;
 		if (!request || request.generationId !== generationId) {
 			request = {
-				at: new Date().toISOString(),
 				model: typeof data.model === "string" ? data.model : event.model,
 				provider,
 				generationId,
 			};
-			requestLogged = false;
-			if (requestStartedAt !== undefined) request.ttftMs = Date.now() - requestStartedAt;
 			displayedProvider = provider;
 			if (ctx.hasUI) ctx.ui.setStatus(UPSTREAM_STATUS_KEY, provider);
 		}
-
-		const usage = data.usage as Record<string, unknown> | undefined;
-		if (usage && typeof usage === "object") {
-			if (typeof usage.cost === "number") request.cost = usage.cost;
-			if (typeof usage.prompt_tokens === "number") request.promptTokens = usage.prompt_tokens;
-			if (typeof usage.completion_tokens === "number") request.completionTokens = usage.completion_tokens;
-			const details = usage.prompt_tokens_details as Record<string, unknown> | undefined;
-			if (details && typeof details.cached_tokens === "number") request.cachedTokens = details.cached_tokens;
-		}
 	});
 
-	pi.on("message_end", async () => {
-		if (!request || requestLogged) return;
-		requestLogged = true;
-		if (requestStartedAt !== undefined) request.durationMs = Date.now() - requestStartedAt;
-		record(request);
+	pi.on("message_end", async (event) => {
+		// Only the assistant message ends a request; a user or tool message must not
+		// republish the provider that served the previous one.
+		if (!request || event.message.role !== "assistant") return;
 		displayedProvider = request.provider;
 		if (persistedProvider !== request.provider) {
 			persistedProvider = request.provider;
@@ -382,8 +331,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("credits", {
 		description: "Show your OpenRouter wallet balance and usage",
 		handler: async (_args, ctx) => {
-			if (!apiKey()) {
-				ctx.ui.notify("No OpenRouter key found (OPENROUTER_API_KEY or auth.json)", "warning");
+			if (!(await apiKey(ctx))) {
+				ctx.ui.notify("No OpenRouter key is configured for pi (environment, auth.json, or /login)", "warning");
 				return;
 			}
 			await refresh(ctx, true);
@@ -391,7 +340,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("Could not read OpenRouter credits", "error");
 				return;
 			}
-			const usage = await fetchKeyUsage();
+			const usage = await fetchKeyUsage(ctx);
 			const lines = [
 				`remaining   ${formatAmount(credits.remaining)}`,
 				`purchased   ${formatAmount(credits.totalCredits)}`,
@@ -404,38 +353,6 @@ export default function (pi: ExtensionAPI) {
 			const age = credits.fetchedAt ? Math.round((Date.now() - credits.fetchedAt) / 1000) : null;
 			if (age !== null) lines.push(`updated     ${age}s ago`);
 			ctx.ui.notify(`OpenRouter wallet\n${lines.join("\n")}`, "info");
-		},
-	});
-
-	pi.registerCommand("upstream", {
-		description: "Show the upstream providers OpenRouter used recently",
-		handler: async (_args, ctx) => {
-			let lines: string[] = [];
-			try {
-				lines = readFileSync(LOG_FILE, "utf8").trim().split("\n").filter(Boolean).slice(-HISTORY);
-			} catch {
-				ctx.ui.notify(`No requests logged yet (${LOG_FILE})`, "info");
-				return;
-			}
-			if (lines.length === 0) {
-				ctx.ui.notify(`No requests logged yet (${LOG_FILE})`, "info");
-				return;
-			}
-			const rows = lines.map((line) => {
-				try {
-					const e = JSON.parse(line) as Request;
-					const time = e.at.slice(11, 19);
-					const cost = typeof e.cost === "number" ? ` $${e.cost.toFixed(6)}` : "";
-					const timing =
-						typeof e.ttftMs === "number"
-							? ` ttft ${e.ttftMs}ms/${typeof e.durationMs === "number" ? e.durationMs : "?"}ms`
-							: "";
-					return `${time}  ${e.provider.padEnd(12)} ${e.model}${timing}${cost}`;
-				} catch {
-					return line;
-				}
-			});
-			ctx.ui.notify(`Recent OpenRouter upstreams\n${rows.join("\n")}`, "info");
 		},
 	});
 }

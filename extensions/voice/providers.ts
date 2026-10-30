@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const AGENT_DIR = getAgentDir();
+const AUTH_PATH = join(AGENT_DIR, "auth.json");
 
 /** One speech-to-text backend. Adding a provider means adding a preset. */
 export type ProviderPreset = {
@@ -79,44 +79,8 @@ export function presetFor(id: string): ProviderPreset {
   return PROVIDER_PRESETS.find((preset) => preset.id === id) ?? PROVIDER_PRESETS[0]!;
 }
 
-export function providerLabel(id: string): string {
-  return presetFor(id).label;
-}
-
-function resolveKeyValue(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    // `!command` keys are resolved by pi itself; don't try to run them here.
-    return value && !value.startsWith("!") ? value : undefined;
-  }
-  if (value && typeof value === "object") {
-    const entry = value as Record<string, unknown>;
-    for (const field of ["access", "key", "apiKey"]) {
-      const candidate = resolveKeyValue(entry[field]);
-      if (candidate) return candidate;
-    }
-  }
-  return undefined;
-}
-
-/**
- * The credential pi stores for that provider, read straight from `auth.json`.
- * `resolveAuth` in auth.ts asks pi first and only lands here as a fallback.
- */
-export function readStoredCredentialRaw(preset: ProviderPreset): string | undefined {
-  if (!preset.authKey) return undefined;
-  try {
-    const auth = JSON.parse(readFileSync(join(AGENT_DIR, "auth.json"), "utf8")) as Record<
-      string,
-      unknown
-    >;
-    return resolveKeyValue(auth[preset.authKey]);
-  } catch {
-    return undefined;
-  }
-}
-
 export function apiKeyHint(preset: ProviderPreset): string {
-  return `Sign in to ${preset.label} in pi (/login), set ${preset.apiKeyEnv[0]}, or store a key for "${preset.authKey ?? preset.id}" in ${join(AGENT_DIR, "auth.json")}.`;
+  return `Sign in to ${preset.label} in pi (/login), set ${preset.apiKeyEnv[0]}, or store a key for "${preset.authKey ?? preset.id}" in ${AUTH_PATH}.`;
 }
 
 export type ModelOption = { id: string; note?: string };

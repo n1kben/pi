@@ -52,14 +52,6 @@ async function countUntrackedAdditions(exec: Exec, cwd: string): Promise<number>
 	return additions;
 }
 
-async function getGitBranch(exec: Exec, cwd: string): Promise<string | null> {
-	const branch = (await git(exec, cwd, ["branch", "--show-current"]))?.trim();
-	if (branch) return branch;
-
-	const detached = (await git(exec, cwd, ["rev-parse", "--short", "HEAD"]))?.trim();
-	return detached || null;
-}
-
 async function getGitStats(exec: Exec, cwd: string): Promise<GitStats> {
 	const numstat = await git(exec, cwd, ["diff", "--numstat", "HEAD", "--"]);
 	if (numstat === undefined) return null;
@@ -84,10 +76,13 @@ function gitStatsText(stats: GitStats): string {
 	return ` ${shellGreen(`+${stats.additions}`)} ${shellRed(`-${stats.deletions}`)}`;
 }
 
+/**
+ * Only the line counts: the branch is pi's footer data, which watches HEAD and
+ * handles worktrees and detached HEAD without a subprocess of ours.
+ */
 async function gitStatusText(exec: Exec, cwd: string): Promise<string | undefined> {
-	const branch = await getGitBranch(exec, cwd);
-	if (!branch) return undefined;
-	return `${shellGreen(`(${branch})`)}${gitStatsText(await getGitStats(exec, cwd))}`;
+	const stats = await getGitStats(exec, cwd);
+	return stats ? gitStatsText(stats) || undefined : undefined;
 }
 
 export default function (pi: ExtensionAPI) {

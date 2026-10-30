@@ -13,6 +13,9 @@
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+/** The shape of a tool result's `structuredContent`, which codemode scripts receive instead of the text. */
+type Json = string | number | boolean | null | readonly Json[] | { [key: string]: Json };
+
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** Short values are redacted everywhere, so they corrupt unrelated output. */
 const MIN_LENGTH = 8;
@@ -38,6 +41,19 @@ function redact(text: string): string {
 	return [...secrets]
 		.sort(([, a], [, b]) => b.length - a.length)
 		.reduce((result, [name, value]) => (value ? result.split(value).join(`[secret:${name}]`) : result), text);
+}
+
+/**
+ * `structuredContent` is what codemode scripts read instead of the text, so a
+ * secret left in it would skip the redaction entirely.
+ */
+function redactJson(value: Json): Json {
+	if (typeof value === "string") return redact(value);
+	if (Array.isArray(value)) return value.map((item) => redactJson(item as Json));
+	if (value && typeof value === "object") {
+		return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactJson(item)])) as Json;
+	}
+	return value;
 }
 
 function hint(name: string, length: number): string {
@@ -110,6 +126,7 @@ export default function (pi: ExtensionAPI) {
 		if (!secrets.size) return;
 		return {
 			content: event.content.map((block) => (block.type === "text" ? { ...block, text: redact(block.text) } : block)),
+			...(event.structuredContent === undefined ? {} : { structuredContent: redactJson(event.structuredContent) }),
 		};
 	});
 }
