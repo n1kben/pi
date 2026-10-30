@@ -73,17 +73,23 @@ function normalizeRepo(owner: string, repo: string): string {
   return `${owner}/${repo.replace(/\.git$/i, "")}`.toLowerCase();
 }
 
-function currentGitHubRepo(cwd: string): string | undefined {
+/**
+ * The GitHub repo this checkout belongs to, or null when it has none.
+ *
+ * The host may carry an SSH alias (`git@github.com-work:owner/repo.git`, the usual
+ * second-account setup), so whatever follows `github.com` is still the same host.
+ */
+function currentGitHubRepo(cwd: string): string | null {
   try {
     const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    const match = remote.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/i);
-    return match ? normalizeRepo(match[1]!, match[2]!) : undefined;
+    const match = remote.match(/github\.com[^/]*[:/]([^/]+)\/([^/]+?)(?:\.git)?$/i);
+    return match ? normalizeRepo(match[1]!, match[2]!) : null;
   } catch {
-    return undefined;
+    return null;
   }
 }
 
@@ -235,15 +241,20 @@ function openUrl(url: string): void {
 }
 
 export default function (pi: ExtensionAPI) {
-  let currentRepo: string | undefined;
+  /** Undefined until the first lookup, null once the checkout is known to have no GitHub remote. */
+  let currentRepo: string | null | undefined;
 
   function chatTextForContext(ctx: ExtensionContext, extraText = ""): string {
     return `${branchText(ctx)}\n${extraText}`;
   }
 
+  /**
+   * Resolved once per session. `??=` cannot do this: a null (no GitHub remote) is nullish
+   * too, so every streamed delta would look again, and each lookup is a blocking spawn.
+   */
   function getCurrentRepo(ctx: ExtensionContext): string | undefined {
-    currentRepo ??= currentGitHubRepo(ctx.cwd);
-    return currentRepo;
+    if (currentRepo === undefined) currentRepo = currentGitHubRepo(ctx.cwd);
+    return currentRepo ?? undefined;
   }
 
   function update(ctx: ExtensionContext, extraText = "") {
