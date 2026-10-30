@@ -14,7 +14,8 @@
   "terminal": {
     "showTerminalProgress": true
   },
-  "steeringMode": "one-at-a-time",
+  "steeringMode": "all",
+  "followUpMode": "all",
   "hideThinkingBlock": true,
   "collapseChangelog": true,
   "quietStartup": true,
