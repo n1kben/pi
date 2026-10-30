@@ -5,14 +5,12 @@
       "compat": {
         "openRouterRouting": {
           "order": [
-            "nebius",
-            "crusoe"
+            "crusoe",
+            "nebius"
           ],
           "allow_fallbacks": true,
-          "sort": "latency",
           "quantizations": [
-            "fp8",
-            "bf16"
+            "fp8"
           ]
         }
       }
