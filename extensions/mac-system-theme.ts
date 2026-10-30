@@ -4,6 +4,10 @@
  * Installed globally for pi from ~/.pi/agent/extensions/mac-system-theme.ts.
  * Override theme names with:
  *   PI_MAC_DARK_THEME=my-dark PI_MAC_LIGHT_THEME=my-light pi
+ *
+ * The switch is deliberately not persisted: pi writes settings.json when a theme
+ * is set by name, so a light/dark flip would leave the config file modified all
+ * day. A Theme instance applies without touching settings.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -29,10 +33,11 @@ export default function (pi: ExtensionAPI) {
 
 		let currentTheme: string | undefined;
 		const syncTheme = async () => {
-			const theme = (await isDarkMode(pi)) ? DARK_THEME : LIGHT_THEME;
-			if (theme === currentTheme) return;
-			currentTheme = theme;
-			ctx.ui.setTheme(theme);
+			const name = (await isDarkMode(pi)) ? DARK_THEME : LIGHT_THEME;
+			if (name === currentTheme) return;
+			currentTheme = name;
+			// An instance applies the theme without rewriting settings.json.
+			ctx.ui.setTheme(ctx.ui.getTheme(name) ?? name);
 		};
 
 		await syncTheme();
